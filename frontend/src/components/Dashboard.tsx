@@ -35,6 +35,19 @@ const Dashboard: React.FC<DashboardProps> = ({
           <div className="attention-section">
             <h2 className="section-title">Attention Score</h2>
             
+            {/* DEBUG: Show current score value */}
+            <div style={{ 
+              background: 'rgba(255, 0, 0, 0.1)', 
+              border: '1px solid red', 
+              padding: '8px', 
+              borderRadius: '4px', 
+              marginBottom: '1rem',
+              fontSize: '14px',
+              fontFamily: 'monospace'
+            }}>
+              🔍 DEBUG: Current attention_score = {attentionScore}
+            </div>
+            
             {/* Attention Score Circle and Auto Nudge Info side by side */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', marginBottom: '1.5rem' }}>
               <AttentionScore score={attentionScore} />
