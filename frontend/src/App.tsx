@@ -543,20 +543,26 @@ function App() {
   const getFocusChart = async () => {
     try {
       console.log('📊 Fetching focus chart for completed session...');
+      console.log('🔍 Making request to: http://localhost:8000/get-focus-chart');
       
       const response = await axios.post<FocusChartResponse>('http://localhost:8000/get-focus-chart');
+      
+      console.log('📊 Chart response received:', response.data);
       
       if (response.data.success) {
         console.log('📈 Focus chart generated successfully!');
         console.log('📊 Session stats:', response.data.session_stats);
+        console.log('📊 Data points:', response.data.data_points);
         
         setFocusChartData(response.data);
         setShowFocusChart(true);
       } else {
         console.warn('⚠️ Focus chart generation failed:', response.data.error);
+        alert(`Chart generation failed: ${response.data.error}`);
       }
     } catch (error) {
       console.error('❌ Error fetching focus chart:', error);
+      alert(`Error fetching chart: ${error}`);
     }
   };
 
@@ -883,6 +889,36 @@ function App() {
             }}
           >
             🔄 Reset
+          </button>
+          
+          {/* Debug button for testing chart generation */}
+          <button 
+            onClick={() => {
+              console.log('🔧 Debug: Testing chart generation...');
+              getFocusChart();
+            }}
+            style={{
+              padding: '0.675rem 1.25rem',
+              background: 'linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)',
+              color: 'white',
+              border: '1px solid rgba(124, 58, 237, 0.5)',
+              borderRadius: '12px',
+              fontWeight: '500',
+              fontSize: '0.9rem',
+              cursor: 'pointer',
+              boxShadow: '0 4px 16px rgba(124, 58, 237, 0.3)',
+              transition: 'all 0.3s ease'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.transform = 'translateY(-1px)';
+              e.currentTarget.style.boxShadow = '0 6px 20px rgba(124, 58, 237, 0.5)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 4px 16px rgba(124, 58, 237, 0.3)';
+            }}
+          >
+            📊 Test Chart
           </button>
         </div>
 

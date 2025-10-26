@@ -127,17 +127,24 @@ async def get_focus_chart():
     global focus_score_history
     
     try:
+        print(f"📊 Chart request received. Focus history length: {len(focus_score_history)}")
+        
         if not focus_score_history:
+            print("⚠️ No focus data available for chart generation")
             return {
                 "success": False,
                 "error": "No focus data available for chart generation"
             }
+        
+        print(f"📈 Generating chart with {len(focus_score_history)} data points")
         
         # Generate chart
         png_path, chart_b64_bytes = generate_focus_chart_base64(focus_score_history)
         
         # Generate session stats
         session_stats = generate_session_stats(focus_score_history)
+        
+        print(f"✅ Chart generated successfully: {png_path}")
         
         return {
             "success": True,
@@ -149,6 +156,19 @@ async def get_focus_chart():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating focus chart: {str(e)}")
+
+@app.get("/focus-history-status")
+async def get_focus_history_status():
+    """Debug endpoint to check focus history status"""
+    global focus_score_history
+    
+    recent_entries = focus_score_history[-5:] if len(focus_score_history) > 5 else focus_score_history
+    
+    return {
+        "total_entries": len(focus_score_history),
+        "recent_entries": recent_entries,
+        "has_data": len(focus_score_history) > 0
+    }
 
 @app.post("/reset-focus-session")
 async def reset_focus_session():
