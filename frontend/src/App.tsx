@@ -56,6 +56,8 @@ interface FaceTrackingStatus {
 }
 
 function App() {
+  // Use relative endpoints; CRA dev server proxy will route to backend
+
   const [motivationData, setMotivationData] = useState<MotivationData | null>(null);
   const [loading, setLoading] = useState(false);
   const [nudgeExecuted, setNudgeExecuted] = useState(false);
@@ -63,7 +65,7 @@ function App() {
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
 
   // Pomodoro Timer State
-  const [pomodoroTime, setPomodoroTime] = useState(25 * 60); // 25 minutes (1500 seconds) - CHANGE THIS VALUE TO ADJUST TIMER
+  const [pomodoroTime, setPomodoroTime] = useState(30); // 30 seconds for quick testing
   const [pomodoroRunning, setPomodoroRunning] = useState(false);
   const [pomodoroSessions, setPomodoroSessions] = useState(0);
   const [isBreakTime, setIsBreakTime] = useState(false); // Track if we're in break mode
@@ -240,8 +242,8 @@ function App() {
     setLoading(true);
     try {
       const url = reset 
-        ? 'http://localhost:8000/motivation?reset=true'
-        : 'http://localhost:8000/motivation';
+        ? `/motivation?reset=true`
+        : `/motivation`;
       
       console.log(`📡 Fetching motivation from: ${url} (reset: ${reset})`);
       const response = await axios.get<MotivationData>(url);
@@ -263,7 +265,7 @@ function App() {
   const decreaseAttention = async () => {
     setLoading(true);
     try {
-      const response = await axios.post<AttentionResponse>('http://localhost:8000/decrease-attention');
+  const response = await axios.post<AttentionResponse>(`/decrease-attention`);
       const newScore = response.data.attention_score;
       
       console.log(`🔢 Attention score changed: ${motivationData?.attention_score} → ${newScore}`);
@@ -299,7 +301,7 @@ function App() {
     
     try {
       console.log('🚀 Calling voice nudge...');
-      const response = await axios.post<NudgeResponse>('http://localhost:8000/get-voice-nudge');
+  const response = await axios.post<NudgeResponse>(`/get-voice-nudge`);
       
       if (response.data.success && motivationData) {
         // Set visual indicator that nudge script executed
@@ -322,7 +324,7 @@ function App() {
         
         // Play audio if available
         if (response.data.audio_url) {
-          const audioUrl = `http://localhost:8000${response.data.audio_url}`;
+          const audioUrl = `${response.data.audio_url}`;
           console.log('🔊 Playing voiceover:', audioUrl);
           
           const success = await playAudio(audioUrl, 'voice');
@@ -363,14 +365,14 @@ function App() {
         audio_url?: string;
         audio_file?: string;
         source: string;
-      }>('http://localhost:8000/generate-voice-audio', {
+  }>(`/generate-voice-audio`, {
         message: motivationData.message
       });
       
       if (response.data.success && response.data.audio_url) {
         setNudgeExecuted(true);
         
-        const audioUrl = `http://localhost:8000${response.data.audio_url}`;
+  const audioUrl = `${response.data.audio_url}`;
         console.log('🔊 Playing current message audio:', audioUrl);
         
         const success = await playAudio(audioUrl, 'voice');
@@ -395,7 +397,7 @@ function App() {
       console.log('🔔 Generating browser notification nudge...');
       
       // Generate motivational message using our backend
-      const response = await axios.post<NudgeResponse>('http://localhost:8000/get-notification-nudge');
+  const response = await axios.post<NudgeResponse>(`/get-notification-nudge`);
       
       if (response.data.success) {
         // Set visual indicator that notification was sent
@@ -453,7 +455,7 @@ function App() {
       // Set break time mode to prevent other nudges from interfering
       setIsBreakTime(true);
       
-      const response = await axios.post<NudgeResponse>('http://localhost:8000/get-break-nudge');
+  const response = await axios.post<NudgeResponse>(`/get-break-nudge`);
       
       console.log('🔍 Break nudge response:', response.data); // Debug log
       
@@ -474,7 +476,7 @@ function App() {
         
         // FORCE audio playback for break nudges
         if (response.data.audio_url) {
-          const audioUrl = `http://localhost:8000${response.data.audio_url}`;
+          const audioUrl = `${response.data.audio_url}`;
           console.log('🔊 FORCING break voiceover playback:', audioUrl);
           
           // Stop any existing audio first
@@ -552,7 +554,7 @@ function App() {
     try {
       console.log('📊 Fetching focus chart for completed session...');
       
-      const response = await axios.post<FocusChartResponse>('http://localhost:8000/get-focus-chart');
+  const response = await axios.post<FocusChartResponse>(`/get-focus-chart`);
       
       if (response.data.success) {
         console.log('📈 Focus chart generated successfully!');
@@ -584,7 +586,7 @@ function App() {
   const pausePomodoro = () => setPomodoroRunning(false);
   const resetPomodoro = () => {
     setPomodoroRunning(false);
-    setPomodoroTime(25 * 60); // Reset to 25 minutes (1500 seconds) - CHANGE THIS TO MATCH INITIAL VALUE
+    setPomodoroTime(30); // Reset to 30 seconds for quick testing
     setIsBreakTime(false); // Exit break mode when resetting
     sessionIncrementedRef.current = false; // Reset session increment flag
   };
@@ -593,7 +595,7 @@ function App() {
   const startFaceTracking = async () => {
     try {
       console.log('📹 Starting face tracking...');
-      const response = await axios.post<FaceTrackingResponse>('http://localhost:8000/start-face-tracking');
+  const response = await axios.post<FaceTrackingResponse>(`/start-face-tracking`);
       
       if (response.data.success) {
         setFaceTrackingActive(true);
@@ -612,7 +614,7 @@ function App() {
   const stopFaceTracking = async () => {
     try {
       console.log('📹 Stopping face tracking...');
-      const response = await axios.post<FaceTrackingResponse>('http://localhost:8000/stop-face-tracking');
+  const response = await axios.post<FaceTrackingResponse>(`/stop-face-tracking`);
       
       if (response.data.success) {
         setFaceTrackingActive(false);
@@ -626,7 +628,7 @@ function App() {
   const checkFaceTrackingStatus = async () => {
     console.log('🔄 DEBUG FRONTEND: checkFaceTrackingStatus() called at', new Date().toLocaleTimeString());
     try {
-      const response = await axios.get<FaceTrackingStatus>('http://localhost:8000/face-tracking-status');
+  const response = await axios.get<FaceTrackingStatus>(`/face-tracking-status`);
       console.log('🔍 DEBUG FRONTEND: Received from backend:', response.data);
       console.log('🔍 DEBUG FRONTEND: Current motivationData.attention_score:', motivationData?.attention_score);
       
@@ -637,14 +639,14 @@ function App() {
         console.log('🎤 DEBUG FRONTEND: Auto-motivation audio detected!', response.data.auto_motivation);
         
         // Play the audio
-        const audioUrl = `http://localhost:8000${response.data.auto_motivation.audio_url}`;
+  const audioUrl = `${response.data.auto_motivation.audio_url}`;
         console.log('🔊 Playing auto-motivation audio:', audioUrl);
         
         const success = await playAudio(audioUrl, 'auto-voice');
         
         if (success) {
           // Mark as played on the backend
-          await axios.post('http://localhost:8000/mark-auto-motivation-played');
+          await axios.post(`/mark-auto-motivation-played`);
           console.log('✅ Auto-motivation audio played and marked as complete');
           
           // Update the message if available
@@ -717,7 +719,7 @@ function App() {
     }
 
     // Reset the increment flag when starting a new timer
-    if (pomodoroRunning && pomodoroTime === 25 * 60) {
+    if (pomodoroRunning && pomodoroTime === 30) {
       sessionIncrementedRef.current = false;
     }
 
@@ -932,7 +934,7 @@ function App() {
           boxShadow: 'inset 0 0 20px rgba(0, 168, 255, 0.1)'
         }}>
           <div style={{ fontWeight: '600', marginBottom: '0.5rem', color: '#ffffff' }}>📋 How it works:</div>
-          • Click Start for 25-minute focus session<br/>
+          • Click Start for 30-second focus session (testing mode)<br/>
           • Timer turns red in final minute<br/>
           • Auto break nudge when timer reaches 0<br/>
           • David Goggins tells you to stretch & hydrate!<br/>
@@ -1047,30 +1049,37 @@ function App() {
                 gap: '1rem',
                 marginBottom: '1.5rem'
               }}>
-                <div style={{ background: '#f3f4f6', padding: '1rem', borderRadius: '8px' }}>
-                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#374151' }}>Average Focus</h4>
-                  <p style={{ margin: 0, fontSize: '1.5rem', fontWeight: 'bold', color: '#059669' }}>
+                <div style={{ background: '#dbeafe', padding: '1rem', borderRadius: '8px', border: '2px solid #3b82f6' }}>
+                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#1e40af', fontSize: '0.9rem' }}>📊 Average Focus</h4>
+                  <p style={{ margin: 0, fontSize: '2rem', fontWeight: 'bold', color: '#2563eb' }}>
                     {focusChartData.session_stats.average_focus ? Math.round(focusChartData.session_stats.average_focus) : 0}%
                   </p>
                 </div>
                 
-                <div style={{ background: '#f3f4f6', padding: '1rem', borderRadius: '8px' }}>
-                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#374151' }}>Peak Focus</h4>
-                  <p style={{ margin: 0, fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>
+                <div style={{ background: '#fed7aa', padding: '1rem', borderRadius: '8px', border: '2px solid #f97316' }}>
+                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#9a3412', fontSize: '0.9rem' }}>🔥 Highest Score</h4>
+                  <p style={{ margin: 0, fontSize: '2rem', fontWeight: 'bold', color: '#ea580c' }}>
                     {focusChartData.session_stats.max_focus ? Math.round(focusChartData.session_stats.max_focus) : 0}%
                   </p>
                 </div>
                 
+                <div style={{ background: '#fecaca', padding: '1rem', borderRadius: '8px', border: '2px solid #dc2626' }}>
+                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#991b1b', fontSize: '0.9rem' }}>📉 Lowest Score</h4>
+                  <p style={{ margin: 0, fontSize: '2rem', fontWeight: 'bold', color: '#dc2626' }}>
+                    {focusChartData.session_stats.min_focus ? Math.round(focusChartData.session_stats.min_focus) : 0}%
+                  </p>
+                </div>
+                
                 <div style={{ background: '#f3f4f6', padding: '1rem', borderRadius: '8px' }}>
-                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#374151' }}>Session Duration</h4>
-                  <p style={{ margin: 0, fontSize: '1.5rem', fontWeight: 'bold', color: '#7c3aed' }}>
+                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#374151', fontSize: '0.9rem' }}>⏱️ Duration</h4>
+                  <p style={{ margin: 0, fontSize: '2rem', fontWeight: 'bold', color: '#6b7280' }}>
                     {focusChartData.session_stats.duration_seconds ? Math.round(focusChartData.session_stats.duration_seconds / 60) : 0} min
                   </p>
                 </div>
                 
                 <div style={{ background: '#f3f4f6', padding: '1rem', borderRadius: '8px' }}>
-                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#374151' }}>Data Points</h4>
-                  <p style={{ margin: 0, fontSize: '1.5rem', fontWeight: 'bold', color: '#dc2626' }}>
+                  <h4 style={{ margin: '0 0 0.5rem 0', color: '#374151', fontSize: '0.9rem' }}>📈 Data Points</h4>
+                  <p style={{ margin: 0, fontSize: '2rem', fontWeight: 'bold', color: '#6b7280' }}>
                     {focusChartData.data_points || 0}
                   </p>
                 </div>

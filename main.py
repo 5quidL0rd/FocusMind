@@ -39,6 +39,9 @@ last_auto_motivation = {
 # Load environment variables from .env file
 load_dotenv()
 
+# Cross-platform Python executable for subprocesses
+PYTHON_CMD = "python" if os.name == "nt" else "python3"
+
 app = FastAPI(title="FocusMind API", description="Motivational Study Coach API")
 
 # Create audio directory if it doesn't exist
@@ -51,18 +54,29 @@ app.mount("/audio", StaticFiles(directory="audio_files"), name="audio")
 # Add CORS middleware to allow React frontend to connect
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3003", "http://localhost:3004", "http://localhost:3005", "http://localhost:3006", "http://localhost:3007", "http://localhost:3008"],  # React dev server on multiple ports
+    allow_origins=[
+        # React dev server on multiple ports (localhost)
+        "http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3003",
+        "http://localhost:3004", "http://localhost:3005", "http://localhost:3006", "http://localhost:3007", "http://localhost:3008",
+        # 127.0.0.1 variants
+        "http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:3002", "http://127.0.0.1:3003",
+        "http://127.0.0.1:3004", "http://127.0.0.1:3005", "http://127.0.0.1:3006", "http://127.0.0.1:3007", "http://127.0.0.1:3008",
+    ],  # React dev server on multiple ports
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize OpenAI client
+# Initialize OpenAI client (optional; frontend will still work with fallback if missing)
 api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is required")
-
-client = OpenAI(api_key=api_key)
+client: OpenAI | None = None
+if api_key:
+    try:
+        client = OpenAI(api_key=api_key)
+    except Exception as e:
+        print(f"⚠️ Failed to initialize OpenAI client, will use fallback messages. Error: {e}")
+else:
+    print("⚠️ OPENAI_API_KEY not set. Using fallback motivational messages.")
 
 class MotivationResponse(BaseModel):
     message: str
@@ -91,22 +105,32 @@ async def get_motivation(reset: bool = False):
             "focus_score": attention_score
         })
     
+    # Try OpenAI first if client is initialized; otherwise use fallback
     try:
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a study coach loosely inspired by David Goggins. Give intense, motivational study advice in a strictly PG version of his style. (No swearing). Keep it under 30 words."},
-                {"role": "user", "content": "Give me motivation to study hard"}
-            ],
-            max_tokens=150
-        )
-        
-        message = response.choices[0].message.content
-        
-        return MotivationResponse(message=message, attention_score=attention_score)
-        
+        if client is not None:
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a study coach loosely inspired by David Goggins. Give intense, motivational study advice in a strictly PG version of his style. (No swearing). Keep it under 30 words."},
+                    {"role": "user", "content": "Give me motivation to study hard"}
+                ],
+                max_tokens=150,
+            )
+            message = response.choices[0].message.content
+        else:
+            raise RuntimeError("OpenAI client not initialized")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating motivation: {str(e)}")
+        print(f"⚠️ OpenAI API failed or unavailable, using fallback. Error: {e}")
+        fallback_messages = [
+            "Stay hard! Your future self is counting on you right now!",
+            "Every second of focus gets you closer to your goals. Stay disciplined!",
+            "Stop making excuses. You have everything you need to succeed!",
+            "Your mind wants to quit, but your dreams are bigger than your excuses!",
+            "Focus is your superpower. Use it to build the life you want!",
+        ]
+        message = random.choice(fallback_messages)
+
+    return MotivationResponse(message=message, attention_score=attention_score)
 
 @app.get("/attention-score")
 async def get_attention_score():
@@ -135,17 +159,24 @@ async def get_focus_chart():
     global focus_score_history
     
     try:
+        print(f"📊 Chart requested! Data points available: {len(focus_score_history)}")
+        
         if not focus_score_history:
+            print("⚠️ No focus data available for chart generation")
             return {
                 "success": False,
                 "error": "No focus data available for chart generation"
             }
+        
+        print(f"✅ Generating chart with {len(focus_score_history)} data points...")
         
         # Generate chart
         png_path, chart_b64_bytes = generate_focus_chart_base64(focus_score_history)
         
         # Generate session stats
         session_stats = generate_session_stats(focus_score_history)
+        
+        print(f"📈 Chart generated successfully! Stats: avg={session_stats['average_focus']:.1f}%, min={session_stats['min_focus']:.1f}%, max={session_stats['max_focus']:.1f}%")
         
         return {
             "success": True,
@@ -156,6 +187,7 @@ async def get_focus_chart():
         }
         
     except Exception as e:
+        print(f"❌ Error generating focus chart: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating focus chart: {str(e)}")
 
 @app.post("/reset-focus-session")
@@ -187,7 +219,7 @@ async def get_voice_nudge():
     try:
         # Run nudge.py script with 'voice' argument and current attention score
         result = subprocess.run(
-            ["python3", "nudge.py", "voice", str(attention_score)], 
+            [PYTHON_CMD, "nudge.py", "voice", str(attention_score)], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -228,7 +260,7 @@ async def generate_voice_audio(request: VoiceAudioRequest):
     try:
         # Use nudge.py to generate audio for the provided message
         result = subprocess.run(
-            ["python3", "nudge.py", "generate_audio", request.message], 
+            [PYTHON_CMD, "nudge.py", "generate_audio", request.message], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -265,7 +297,7 @@ async def get_notification_nudge():
     try:
         # Run nudge.py script with 'notification' argument and current attention score
         result = subprocess.run(
-            ["python3", "nudge.py", "notification", str(attention_score)], 
+            [PYTHON_CMD, "nudge.py", "notification", str(attention_score)], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -298,7 +330,7 @@ async def get_break_nudge():
     try:
         # Run nudge.py script with 'break' argument (no attention score needed for breaks)
         result = subprocess.run(
-            ["python3", "nudge.py", "break"], 
+            [PYTHON_CMD, "nudge.py", "break"], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -357,6 +389,8 @@ async def update_focus_score(request: FocusScoreUpdate):
         "score": attention_score
     })
     
+    print(f"📊 Focus score updated: {attention_score}% (Total data points: {len(focus_score_history)})")
+    
     # Keep only last 1000 entries to prevent memory issues
     if len(focus_score_history) > 1000:
         focus_score_history = focus_score_history[-1000:]
@@ -377,7 +411,7 @@ async def trigger_auto_motivation(request: AutoMotivationTrigger):
         
         # Run nudge.py script with 'voice' argument and current attention score
         result = subprocess.run(
-            ["python3", "nudge.py", "voice", str(int(request.focus_score))], 
+            [PYTHON_CMD, "nudge.py", "voice", str(int(request.focus_score))], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -455,7 +489,7 @@ async def start_face_tracking():
     return {
         "success": True,
         "message": "Face tracking start signal sent. Please run face_focus_tracker.py manually.",
-        "command": "python3 face_focus_tracker.py --source 0"
+        "command": f"{PYTHON_CMD} face_focus_tracker.py --source 0"
     }
 
 @app.post("/stop-face-tracking")
