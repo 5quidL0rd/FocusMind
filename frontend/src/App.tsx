@@ -616,16 +616,34 @@ function App() {
   };
 
   const checkFaceTrackingStatus = async () => {
+    console.log('🔄 DEBUG FRONTEND: checkFaceTrackingStatus() called at', new Date().toLocaleTimeString());
     try {
       const response = await axios.get<FaceTrackingStatus>('http://localhost:8000/face-tracking-status');
+      console.log('🔍 DEBUG FRONTEND: Received from backend:', response.data);
+      console.log('🔍 DEBUG FRONTEND: Current motivationData.attention_score:', motivationData?.attention_score);
+      
       setLastFaceTrackingUpdate(response.data.last_update);
       
       // Update attention score from face tracking if available
-      if (response.data.attention_score !== undefined && motivationData) {
-        setMotivationData({
-          ...motivationData,
-          attention_score: response.data.attention_score
-        });
+      if (response.data.attention_score !== undefined) {
+        console.log('🔍 DEBUG FRONTEND: Updating attention_score from', motivationData?.attention_score, 'to', response.data.attention_score);
+        
+        if (motivationData) {
+          // Update existing motivationData
+          setMotivationData({
+            ...motivationData,
+            attention_score: response.data.attention_score
+          });
+        } else {
+          // Initialize motivationData if it's null
+          setMotivationData({
+            message: "Welcome to FocusMind! Your attention score is being tracked.",
+            attention_score: response.data.attention_score
+          });
+        }
+        console.log('✅ DEBUG FRONTEND: State updated successfully');
+      } else {
+        console.log('🔍 DEBUG FRONTEND: NOT updating attention_score. attention_score undefined?', response.data.attention_score === undefined);
       }
     } catch (error) {
       console.error('❌ Error checking face tracking status:', error);
@@ -694,21 +712,20 @@ function App() {
     };
   }, [currentAudio]);
 
-  // Face tracking status monitoring
+  // Face tracking status monitoring - Always poll to detect external face tracking
   useEffect(() => {
-    let statusInterval: NodeJS.Timeout | null = null;
+    // Check face tracking status every 1 second for more real-time updates
+    const statusInterval = setInterval(() => {
+      checkFaceTrackingStatus();
+    }, 1000);
     
-    if (faceTrackingActive || pomodoroRunning) {
-      // Check face tracking status every 3 seconds when active or during Pomodoro
-      statusInterval = setInterval(() => {
-        checkFaceTrackingStatus();
-      }, 3000);
-    }
+    // Also check immediately on mount
+    checkFaceTrackingStatus();
     
     return () => {
-      if (statusInterval) clearInterval(statusInterval);
+      clearInterval(statusInterval);
     };
-  }, [faceTrackingActive, pomodoroRunning]);
+  }, []);
 
   // Auto-start face tracking when Pomodoro begins
   useEffect(() => {

@@ -69,11 +69,11 @@ async def get_motivation(reset: bool = False):
     """Get a motivational quote from David Goggins style coach"""
     global attention_score, focus_score_history
     
-    # Reset attention score to 100 if requested (page refresh)
+    # Reset focus history if requested (page refresh), but preserve attention_score from face tracking
     if reset:
-        attention_score = 100
-        # Also reset focus history when starting a new session
+        # Only reset focus history, NOT attention_score (preserve real-time face tracking data)
         focus_score_history = []
+        # Keep the current attention_score from face tracking
     
     # Add initial score to history if it's the first entry
     if not focus_score_history:
@@ -179,7 +179,7 @@ async def get_voice_nudge():
     try:
         # Run nudge.py script with 'voice' argument and current attention score
         result = subprocess.run(
-            ["py", "nudge.py", "voice", str(attention_score)], 
+            ["python3", "nudge.py", "voice", str(attention_score)], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -220,7 +220,7 @@ async def generate_voice_audio(request: VoiceAudioRequest):
     try:
         # Use nudge.py to generate audio for the provided message
         result = subprocess.run(
-            ["py", "nudge.py", "generate_audio", request.message], 
+            ["python3", "nudge.py", "generate_audio", request.message], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -257,7 +257,7 @@ async def get_notification_nudge():
     try:
         # Run nudge.py script with 'notification' argument and current attention score
         result = subprocess.run(
-            ["py", "nudge.py", "notification", str(attention_score)], 
+            ["python3", "nudge.py", "notification", str(attention_score)], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -290,7 +290,7 @@ async def get_break_nudge():
     try:
         # Run nudge.py script with 'break' argument (no attention score needed for breaks)
         result = subprocess.run(
-            ["py", "nudge.py", "break"], 
+            ["python3", "nudge.py", "break"], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -369,7 +369,7 @@ async def trigger_auto_motivation(request: AutoMotivationTrigger):
         
         # Run nudge.py script with 'voice' argument and current attention score
         result = subprocess.run(
-            ["py", "nudge.py", "voice", str(int(request.focus_score))], 
+            ["python3", "nudge.py", "voice", str(int(request.focus_score))], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -405,21 +405,27 @@ async def trigger_auto_motivation(request: AutoMotivationTrigger):
 @app.get("/face-tracking-status")
 async def get_face_tracking_status():
     """Get the current status of face tracking."""
-    global face_tracker, tracking_active, focus_score_history
+    global face_tracker, tracking_active, focus_score_history, attention_score
+    
+    print(f"🔍 DEBUG BACKEND: attention_score = {attention_score}, focus_history_length = {len(focus_score_history)}")
     
     if face_tracker is None:
+        print(f"🔍 DEBUG BACKEND: Face tracker is None, returning attention_score: {attention_score}")
         return {
             "active": False,
-            "score": None,
+            "attention_score": attention_score,
+            "focus_history_length": len(focus_score_history),
             "last_update": None,
-            "message": "Face tracking not initialized"
+            "tracking_active": False
         }
     
+    print(f"🔍 DEBUG BACKEND: Face tracker exists, returning attention_score: {attention_score}")
     return {
         "active": tracking_active,
-        "score": focus_score_history[-1]["score"] if focus_score_history else None,
-        "last_update": focus_score_history[-1]["timestamp"] if focus_score_history else None,
-        "message": "Face tracking active" if tracking_active else "Face tracking paused"
+        "attention_score": attention_score,
+        "focus_history_length": len(focus_score_history),
+        "last_update": str(focus_score_history[-1]["timestamp"]) if focus_score_history else None,
+        "tracking_active": tracking_active
     }
 
 @app.post("/start-face-tracking")
