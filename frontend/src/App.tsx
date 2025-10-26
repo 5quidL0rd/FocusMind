@@ -580,13 +580,23 @@ function App() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const startPomodoro = () => setPomodoroRunning(true);
+  const startPomodoro = () => {
+    setPomodoroRunning(true);
+    // Auto-start face tracking when Pomodoro starts
+    if (!faceTrackingActive) {
+      startFaceTracking();
+    }
+  };
   const pausePomodoro = () => setPomodoroRunning(false);
   const resetPomodoro = () => {
     setPomodoroRunning(false);
     setPomodoroTime(25 * 60); // Reset to 25 minutes (1500 seconds) - CHANGE THIS TO MATCH INITIAL VALUE
     setIsBreakTime(false); // Exit break mode when resetting
     sessionIncrementedRef.current = false; // Reset session increment flag
+    // Stop face tracking when resetting Pomodoro
+    if (faceTrackingActive) {
+      stopFaceTracking();
+    }
   };
 
   // Face Tracking Functions
@@ -597,15 +607,17 @@ function App() {
       
       if (response.data.success) {
         setFaceTrackingActive(true);
-        console.log('✅ Face tracking started successfully');
-        console.log('💡 Command to run manually:', response.data.command);
-        
-        // Show notification to user about manual command
-        alert(`Face tracking enabled! Please run this command in a new terminal:\n\n${response.data.command}`);
+        console.log('✅ Face tracking started successfully!');
+        // No alert needed - it starts automatically now
+      } else {
+        console.log('ℹ️ Face tracking:', response.data.message);
+        // If already running, just update the state
+        if ((response.data as any).already_running) {
+          setFaceTrackingActive(true);
+        }
       }
     } catch (error) {
       console.error('❌ Error starting face tracking:', error);
-      alert('Failed to start face tracking. Make sure the backend is running.');
     }
   };
 
@@ -933,9 +945,9 @@ function App() {
         }}>
           <div style={{ fontWeight: '600', marginBottom: '0.5rem', color: '#ffffff' }}>📋 How it works:</div>
           • Click Start for 25-minute focus session<br/>
-          • Timer turns red in final minute<br/>
+          • AI in the voice/style of David Goggins motivates you when your focus score drops<br/>
           • Auto break nudge when timer reaches 0<br/>
-          • David Goggins tells you to stretch & hydrate!<br/>
+
           • After break → See your focus performance chart!<br/>
           • {isBreakTime ? '🛌 BREAK MODE: No other nudges will interrupt' : '💪 FOCUS MODE: Ready for motivation'}
         </div>
