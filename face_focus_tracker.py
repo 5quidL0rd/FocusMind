@@ -108,6 +108,15 @@ class FaceFocusTracker:
         self.head_pitch_history = deque(maxlen=5)
         self.head_yaw_history = deque(maxlen=5)
         
+        # Focus score tracking for session statistics
+        self.focus_score_history = deque()  # Keep all scores for session average
+        
+        # Note-taking grace period system
+        self.note_taking_grace_period = 5.0  # 5 seconds grace period
+        self.note_taking_start_time = None
+        self.note_taking_active = False
+        self.last_note_taking_check = 0.0
+        
         # Face tracking data
         self.expression = None
         self.eyes_open_ratio = 0.0
@@ -122,12 +131,34 @@ class FaceFocusTracker:
     def initialize_camera(self, source=0):
         """Initialize camera and MediaPipe components"""
         try:
-            # Open video source
-            self.cap = cv2.VideoCapture(source)
-            if not self.cap.isOpened():
-                raise RuntimeError(f"Cannot open video source: {source}")
+            print("📸 Initializing camera...")
             
-            # Initialize MediaPipe Face-Mesh with higher sensitivity
+            # Open video source with timeout protection
+            self.cap = cv2.VideoCapture(source)
+            
+            # Set camera properties for better performance
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to prevent lag
+            self.cap.set(cv2.CAP_PROP_FPS, 30)  # Set reasonable FPS
+            
+            # Test camera with timeout
+            start_time = time.perf_counter()
+            max_init_time = 10.0  # 10 second timeout
+            
+            camera_ready = False
+            while time.perf_counter() - start_time < max_init_time:
+                if self.cap.isOpened():
+                    ret, test_frame = self.cap.read()
+                    if ret and test_frame is not None:
+                        camera_ready = True
+                        break
+                time.sleep(0.1)
+            
+            if not camera_ready:
+                raise RuntimeError(f"Camera timeout: Cannot initialize video source {source} within {max_init_time}s")
+            
+            print("✅ Camera initialized successfully")
+            
+            # Initialize MediaPipe Face-Mesh with optimized settings
             mp_face_mesh = mp.solutions.face_mesh
             self.face_mesh = mp_face_mesh.FaceMesh(
                 static_image_mode=False,
@@ -220,14 +251,103 @@ class FaceFocusTracker:
         
         return "Center"
 
+    def is_note_taking_gesture(self, gaze_direction, head_pitch, head_yaw):
+        """
+        Detect if the user is in a note-taking position.
+        Note-taking is characterized by:
+        - Looking down (gaze or head pitch)
+        - Optionally looking slightly left or right (for notebook position)
+        """
+        # Check if looking down via gaze
+        looking_down_gaze = gaze_direction == "Down"
+        
+        # Check if looking down via head pitch (more than 15 degrees down)
+        looking_down_head = head_pitch < -15.0
+        
+        # Check if looking slightly to the side (common when writing in notebooks)
+        # Allow up to 30 degrees left or right
+        looking_slightly_sideways = abs(head_yaw) <= 30.0
+        
+        # Note-taking gesture: looking down + not extremely turned away
+        is_note_taking = (looking_down_gaze or looking_down_head) and looking_slightly_sideways
+        
+        return is_note_taking
+
+    def update_note_taking_grace_period(self, current_time, gaze_direction, head_pitch, head_yaw):
+        """
+        Update the note-taking grace period state.
+        Returns True if currently in grace period, False otherwise.
+        """
+        is_note_taking_now = self.is_note_taking_gesture(gaze_direction, head_pitch, head_yaw)
+        
+        # If we detect note-taking and haven't started the grace period yet
+        if is_note_taking_now and not self.note_taking_active:
+            self.note_taking_start_time = current_time
+            self.note_taking_active = True
+            print(f"📝 Note-taking detected - starting {self.note_taking_grace_period}s grace period")
+        
+        # If we're not note-taking anymore, reset the grace period
+        elif not is_note_taking_now and self.note_taking_active:
+            self.note_taking_active = False
+            self.note_taking_start_time = None
+            print("📝 Note-taking ended - grace period reset")
+        
+        # Check if we're still within the grace period
+        if self.note_taking_active and self.note_taking_start_time is not None:
+            grace_time_elapsed = current_time - self.note_taking_start_time
+            
+            if grace_time_elapsed <= self.note_taking_grace_period:
+                # Still in grace period
+                remaining_time = self.note_taking_grace_period - grace_time_elapsed
+                if current_time - self.last_note_taking_check > 1.0:  # Print update every second
+                    print(f"📝 Note-taking grace period: {remaining_time:.1f}s remaining")
+                    self.last_note_taking_check = current_time
+                return True
+            else:
+                # Grace period expired, start applying penalties
+                if self.note_taking_active:  # Only print once when grace period expires
+                    print("📝 Note-taking grace period expired - applying focus penalties")
+                    self.note_taking_active = False
+        return False
+
     def process_frame(self, frame):
         """Process a single video frame and extract focus metrics"""
         current_time = time.perf_counter()
         
-        # Convert to RGB for MediaPipe
-        h, w = frame.shape[:2]
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.face_mesh.process(rgb)
+        # Convert to RGB for MediaPipe with error handling
+        try:
+            h, w = frame.shape[:2]
+            
+            # Resize frame if too large to prevent processing overload
+            if w > 1280 or h > 720:
+                scale = min(1280/w, 720/h)
+                new_w, new_h = int(w * scale), int(h * scale)
+                frame = cv2.resize(frame, (new_w, new_h))
+                h, w = new_h, new_w
+            
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Process with MediaPipe - this is where freezes often occur
+            results = self.face_mesh.process(rgb)
+            
+        except Exception as e:
+            print(f"⚠️ MediaPipe processing error: {e}")
+            # Return safe defaults on error
+            return {
+                'face_present': False,
+                'eyes_open_ratio': 0.0,
+                'eyes_closed_duration': 0.0,
+                'gaze_direction': "Away",
+                'gaze_away_ratio': 1.0,
+                'head_pitch': 0.0,
+                'head_yaw': 0.0,
+                'blink_rate': 0.0,
+                'expression': None,
+                'landmarks_array': None,
+                'frame_shape': (h, w) if 'h' in locals() else (480, 640),
+                'in_note_taking_grace_period': False,
+                'note_taking_active': False
+            }
         
         face_present = bool(results.multi_face_landmarks)
         
@@ -333,6 +453,11 @@ class FaceFocusTracker:
             # Determine gaze away ratio
             gaze_away_ratio = 0.0 if self.gaze_label == "Center" else 1.0
             
+            # Update note-taking grace period
+            in_grace_period = self.update_note_taking_grace_period(
+                current_time, self.gaze_label, head_pitch, head_yaw
+            )
+            
         else:
             # No face detected
             self.eyes_open_ratio = 0.0
@@ -342,6 +467,12 @@ class FaceFocusTracker:
             gaze_away_ratio = 1.0
             head_pitch = 0.0
             head_yaw = 0.0
+            in_grace_period = False
+            
+            # Reset note-taking grace period when face is not present
+            if self.note_taking_active:
+                self.note_taking_active = False
+                self.note_taking_start_time = None
         
         # Calculate blink rate using the enhanced tracking
         time_elapsed = current_time - self.blink_state.get('last_reset_time', self.session_start_time)
@@ -364,7 +495,9 @@ class FaceFocusTracker:
             'blink_rate': blink_rate,
             'expression': self.expression,
             'landmarks_array': pts if face_present else None,
-            'frame_shape': (h, w)
+            'frame_shape': (h, w),
+            'in_note_taking_grace_period': in_grace_period,
+            'note_taking_active': self.note_taking_active
         }
 
     def compute_and_update_focus_score(self, metrics, landmarks_array=None, frame_shape=None):
@@ -382,7 +515,8 @@ class FaceFocusTracker:
                     current_time=current_time,
                     prev_score=self.current_focus_score,
                     blink_state=self.blink_state,
-                    face_present=metrics['face_present']
+                    face_present=metrics['face_present'],
+                    in_note_taking_grace_period=metrics.get('in_note_taking_grace_period', False)
                 )
             else:
                 # Fallback to original method with sustained attention
@@ -400,7 +534,8 @@ class FaceFocusTracker:
                     focus_trend=0.0,  # Could be enhanced to track trend
                     prev_score=self.current_focus_score,
                     sustained_focus_time=self.sustained_focus_time,
-                    current_time=current_time
+                    current_time=current_time,
+                    in_note_taking_grace_period=metrics.get('in_note_taking_grace_period', False)
                 )
                 new_focus_score, self.sustained_focus_time = result
             
@@ -416,6 +551,9 @@ class FaceFocusTracker:
                 print(f"👁️ Eye openness: {metrics['eyes_open_ratio']:.3f}, Eyes closed: {metrics['eyes_closed_duration']:.2f}s, Blinks: {self.blink_state['blink_count']}")
             
             self.current_focus_score = new_focus_score
+            
+            # Track focus score for session statistics
+            self.focus_score_history.append(new_focus_score)
             
             # Send update to backend
             current_time = time.time()
@@ -528,9 +666,18 @@ class FaceFocusTracker:
         if self.sustained_focus_time >= 10.0:
             sustained_info = f" 🔥{self.sustained_focus_time:.0f}s"
         
+        # Note-taking status info
+        note_taking_info = ""
+        if metrics.get('in_note_taking_grace_period', False):
+            if self.note_taking_start_time:
+                remaining_time = self.note_taking_grace_period - (time.perf_counter() - self.note_taking_start_time)
+                note_taking_info = f" 📝{remaining_time:.1f}s"
+        elif metrics.get('note_taking_active', False):
+            note_taking_info = " 📝Active"
+        
         hud_lines = [
             f"Face: {'Yes' if metrics['face_present'] else 'No'}",
-            f"Focus Score: {self.current_focus_score:.1f}%{sustained_info}",
+            f"Focus Score: {self.current_focus_score:.1f}%{sustained_info}{note_taking_info}",
             f"Expression: {metrics['expression'] or '--'}",
             f"Eye openness: {metrics['eyes_open_ratio']:.3f}",
             f"Eyes closed: {metrics['eyes_closed_duration']:.2f}s",
@@ -589,33 +736,91 @@ class FaceFocusTracker:
         print("Press ESC to stop tracking")
         
         try:
+            frame_count = 0
+            last_fps_time = time.perf_counter()
+            fps_counter = 0
+            
             while self.running:
+                loop_start_time = time.perf_counter()
+                
                 ret, frame = self.cap.read()
                 if not ret:
                     print("📹 Video stream ended")
                     break
                 
-                # Process frame and get focus metrics
-                metrics = self.process_frame(frame)
+                # Skip frame processing if it's taking too long (prevent freeze)
+                frame_count += 1
+                if frame_count % 2 == 0:  # Process every other frame to reduce load
+                    # Yield to other threads occasionally
+                    if frame_count % 10 == 0:
+                        time.sleep(0.001)  # 1ms break every 10 frames
+                    continue
                 
-                # Compute and update focus score with enhanced landmarks
-                self.compute_and_update_focus_score(
-                    metrics, 
-                    landmarks_array=metrics.get('landmarks_array'),
-                    frame_shape=metrics.get('frame_shape')
-                )
+                try:
+                    # Process frame and get focus metrics with timeout protection
+                    metrics = self.process_frame(frame)
+                    
+                    # Compute and update focus score with enhanced landmarks
+                    self.compute_and_update_focus_score(
+                        metrics, 
+                        landmarks_array=metrics.get('landmarks_array'),
+                        frame_shape=metrics.get('frame_shape')
+                    )
+                except Exception as e:
+                    print(f"⚠️ Frame processing error (skipping): {e}")
+                    continue
                 
                 # Draw overlay if video display is enabled
                 if self.show_video:
-                    self.draw_overlay(frame, metrics)
-                    cv2.imshow("FocusMind - AI Focus Tracker", frame)
+                    try:
+                        self.draw_overlay(frame, metrics)
+                        cv2.imshow("FocusMind - AI Focus Tracker", frame)
+                    except Exception as e:
+                        print(f"⚠️ Display error: {e}")
                     
-                    # Check for ESC key
-                    if cv2.waitKey(1) & 0xFF == 27:
+                    # Check for ESC key (non-blocking)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == 27:  # ESC
                         break
+                
+                # FPS monitoring and performance check
+                fps_counter += 1
+                current_time = time.perf_counter()
+                if current_time - last_fps_time >= 5.0:  # Every 5 seconds
+                    fps = fps_counter / (current_time - last_fps_time)
+                    if fps < 5:  # If FPS drops below 5, warn user
+                        print(f"⚠️ Performance warning: FPS={fps:.1f} (consider closing other apps)")
+                    fps_counter = 0
+                    last_fps_time = current_time
+                
+                # Prevent runaway processing - ensure minimum frame time
+                loop_duration = time.perf_counter() - loop_start_time
+                min_frame_time = 1.0 / 30.0  # Max 30 FPS to prevent overload
+                if loop_duration < min_frame_time:
+                    time.sleep(min_frame_time - loop_duration)
                 
         except KeyboardInterrupt:
             print("\n⏹️ Stopping face tracking...")
+            
+            # Calculate and display session statistics
+            if self.focus_score_history:
+                avg_score = sum(self.focus_score_history) / len(self.focus_score_history)
+                session_duration = time.perf_counter() - self.session_start_time
+                total_measurements = len(self.focus_score_history)
+                min_score = min(self.focus_score_history)
+                max_score = max(self.focus_score_history)
+                
+                print(f"📊 Session Summary:")
+                print(f"   ⏱️  Duration: {session_duration/60:.1f} minutes")
+                print(f"   📈 Average Focus Score: {avg_score:.1f}")
+                print(f"   📊 Total Measurements: {total_measurements}")
+                print(f"   🔻 Lowest Score: {min_score:.1f}")
+                print(f"   🔺 Highest Score: {max_score:.1f}")
+            else:
+                print("📊 No focus data collected during session")
+        except Exception as e:
+            print(f"💥 Unexpected error: {e}")
+            print("🔄 Attempting to recover...")
         finally:
             self.stop()
         

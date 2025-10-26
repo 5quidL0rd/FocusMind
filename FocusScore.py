@@ -52,7 +52,8 @@ def compute_focus_score(
     focus_trend: float,
     prev_score: float,
     sustained_focus_time: float = 0.0,
-    current_time: float = None
+    current_time: float = None,
+    in_note_taking_grace_period: bool = False
 ) -> tuple:
     """
     Return a smooth focus score (0-100).
@@ -88,22 +89,42 @@ def compute_focus_score(
     # No penalty for brief closures (blinking, brief rests)
 
     # Gaze scoring - More forgiving and allows higher scores
-    gaze_map = {
-        "forward": 1.0,    # Perfect focus
-        "Center": 1.0,     # Also perfect
-        "down": 0.95,      # Minor penalty - allows note-taking
-        "up": 0.90,        # Slight penalty - less bouncy
-        "left": 0.70,      # Moderate penalty - distraction
-        "right": 0.70,     # Moderate penalty - distraction
-        "Away": 0.50       # Moderate penalty - less harsh for brief glances
-    }
-    gaze_score = gaze_map.get(gaze_direction, 0.90)  # Higher default for unknown directions
-    # Reduced additional gaze away penalty
-    gaze_away_penalty = float(max(0.0, min(0.10, gaze_away_ratio)))  # Reduced to 10% max penalty
+    # Apply note-taking grace period protection
+    if in_note_taking_grace_period:
+        # During grace period, treat "down" gaze as if it were "center"
+        # This allows note-taking without immediate penalty
+        effective_gaze_direction = "Center" if gaze_direction == "Down" else gaze_direction
+        gaze_map = {
+            "forward": 1.0,    # Perfect focus
+            "Center": 1.0,     # Also perfect (includes protected "down" during grace period)
+            "down": 1.0,       # Protected during grace period
+            "up": 0.90,        # Slight penalty - less bouncy
+            "left": 0.70,      # Moderate penalty - distraction
+            "right": 0.70,     # Moderate penalty - distraction
+            "Away": 0.50       # Moderate penalty - less harsh for brief glances
+        }
+        gaze_score = gaze_map.get(effective_gaze_direction, 0.90)
+        # No gaze away penalty during grace period for protected directions
+        gaze_away_penalty = 0.0 if gaze_direction == "Down" else float(max(0.0, min(0.10, gaze_away_ratio)))
+    else:
+        # Normal gaze scoring when not in grace period
+        gaze_map = {
+            "forward": 1.0,    # Perfect focus
+            "Center": 1.0,     # Also perfect
+            "down": 0.95,      # Minor penalty - allows note-taking
+            "up": 0.90,        # Slight penalty - less bouncy
+            "left": 0.70,      # Moderate penalty - distraction
+            "right": 0.70,     # Moderate penalty - distraction
+            "Away": 0.50       # Moderate penalty - less harsh for brief glances
+        }
+        gaze_score = gaze_map.get(gaze_direction, 0.90)  # Higher default for unknown directions
+        # Reduced additional gaze away penalty
+        gaze_away_penalty = float(max(0.0, min(0.10, gaze_away_ratio)))  # Reduced to 10% max penalty
+    
     gaze_score *= (1.0 - gaze_away_penalty)
 
     # Head position scoring - More responsive to moderate head movements
-    # Ideal head position gets high score, noticeable penalties for moderate turns
+    # Apply note-taking grace period protection for head pitch
     head_score = 1.0
     
     # Yaw (left/right) penalty - start penalizing earlier with more noticeable impact
@@ -112,7 +133,14 @@ def compute_focus_score(
         head_score -= yaw_penalty
     
     # Pitch (up/down) penalty - more responsive to moderate movements
-    if head_pitch < -3:  # Looking down very slightly (was -5)
+    # Apply grace period protection for looking down
+    if in_note_taking_grace_period and head_pitch < -3:
+        # During grace period, reduce or eliminate head pitch penalty for looking down
+        print(f"📝 Head pitch penalty reduced during grace period: {head_pitch:.1f}°")
+        # Apply much smaller penalty during grace period
+        pitch_penalty = min((abs(head_pitch) - 15) / 50.0, 0.10)  # Very small penalty, starts at 15°
+        head_score -= max(0, pitch_penalty)  # Only apply if significant downward look
+    elif head_pitch < -3:  # Looking down very slightly (was -5)
         pitch_penalty = min((abs(head_pitch) - 3) / 35.0, 0.40)  # Up to 40% penalty for down movement
         head_score -= pitch_penalty
     elif head_pitch > 8:  # Looking up (was 10)
@@ -162,18 +190,43 @@ def compute_focus_score(
           head_score >= 0.50 and blink_score >= 0.75):
         baseline_boost = 0.15  # 15% boost for decent conditions - much more aggressive
 
-    # Apply VERY gradual EMA smoothing for ultra-stable changes
+    # Apply DYNAMIC EMA smoothing based on score direction and magnitude
     raw_score = (weighted_sum + baseline_boost) * 100.0
     
-    # Debug output for troubleshooting low scores
-    if raw_score < 85.0:  # Only show debug when score is unexpectedly low
-        print(f"🔍 Debug - Low score ({raw_score:.1f}): gaze={gaze_score:.2f}, eye={eye_score:.2f}, head={head_score:.2f}, blink={blink_score:.2f}, boost={baseline_boost:.2f}")
+   
+    # Dynamic alpha based on score change direction and current score level
+    score_change = raw_score - prev_score
     
-    # Much more conservative smoothing to prevent bounciness
+    # Base alpha values - much more conservative for ultra-smooth updates
+    alpha_decline = 0.04    # Very slow decline when performance drops
+    alpha_improve = 0.02    # Very slow improvement when performance recovers
+    
+    # Dynamic adjustments based on score level - much less aggressive
+    if raw_score < 70:  # In concerning range (70s)
+        alpha_decline = 0.06   # Gentle decline in 70s - smooth but responsive
+        alpha_improve = 0.015  # Slow recovery from 70s - earned improvement
+        if abs(score_change) > 5:  # Large changes in 70s
+            print(f"⚠️ Focus in 70s range - dynamic response: {prev_score:.1f}% → {raw_score:.1f}%")
+    elif raw_score < 60:  # In poor range (60s)
+        alpha_decline = 0.08   # Moderate decline in 60s - still smooth
+        alpha_improve = 0.01   # Very slow recovery from 60s
+        if abs(score_change) > 5:
+            print(f"🚨 Focus in 60s range - urgent response: {prev_score:.1f}% → {raw_score:.1f}%")
+    elif raw_score < 50:  # Critical range
+        alpha_decline = 0.10   # Noticeable but smooth decline below 50
+        alpha_improve = 0.008  # Extremely slow recovery from critical levels
+        if abs(score_change) > 5:
+            print(f"🔴 CRITICAL focus level - maximum response: {prev_score:.1f}% → {raw_score:.1f}%")
+    
+    # Choose alpha based on direction of change
     if raw_score > prev_score:
-        alpha = 0.08  # Very slow improvement rate - less bouncy
+        alpha = alpha_improve  # Slow improvement
     else:
-        alpha = 0.05  # Very slow decline rate - ultra smooth
+        alpha = alpha_decline  # Faster decline but controlled
+    
+    # Additional boost for sustained good performance
+    if raw_score >= 85 and prev_score >= 85:
+        alpha = 0.05  # Slower response in good range for more stability
     
     focus_score = (1.0 - alpha) * float(prev_score) + alpha * raw_score
     
@@ -293,7 +346,8 @@ def compute_enhanced_face_metrics(landmarks_array, frame_shape, current_time, bl
 
 def compute_focus_score_with_landmarks(landmarks_array, frame_shape, gaze_direction, 
                                      gaze_away_ratio, current_time, prev_score, 
-                                     blink_state=None, face_present=True):
+                                     blink_state=None, face_present=True, 
+                                     in_note_taking_grace_period=False):
     """
     Enhanced focus score computation using actual MediaPipe landmarks.
     Integrates face_track.py functions for accurate blink and head pose detection.
@@ -331,7 +385,8 @@ def compute_focus_score_with_landmarks(landmarks_array, frame_shape, gaze_direct
         focus_trend=0.0,  # Could be enhanced
         prev_score=prev_score,
         sustained_focus_time=0.0,  # Default value for sustained time
-        current_time=current_time
+        current_time=current_time,
+        in_note_taking_grace_period=in_note_taking_grace_period
     )
     
     focus_score, sustained_time = result  # Unpack the tuple
@@ -362,13 +417,41 @@ def generate_focus_chart_base64(focus_data: List[Dict[str, Any]], dpi: int = 120
 
     y = list(df["focus_score"])
 
-    fig, ax = plt.subplots(figsize=(10, 4), dpi=dpi)
-    ax.plot(x, y, linewidth=2)
-    ax.set_title("Focus Score — Session")
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Focus Score (0–100)")
+    # Calculate session statistics
+    avg_score = sum(y) / len(y)
+    min_score = min(y)
+    max_score = max(y)
+    
+    fig, ax = plt.subplots(figsize=(12, 6), dpi=dpi)
+    ax.plot(x, y, linewidth=2, color='#2E86AB', label='Focus Score')
+    
+    # Add horizontal lines for statistics
+    ax.axhline(y=avg_score, color='#A23B72', linestyle='--', linewidth=1.5, alpha=0.8, label=f'Average: {avg_score:.1f}')
+    ax.axhline(y=max_score, color='#F18F01', linestyle=':', linewidth=1.5, alpha=0.8, label=f'Highest: {max_score:.1f}')
+    ax.axhline(y=min_score, color='#C73E1D', linestyle=':', linewidth=1.5, alpha=0.8, label=f'Lowest: {min_score:.1f}')
+    
+    # Enhanced title with session summary
+    session_duration = len(y) / 60 if len(y) > 60 else len(y) / 60  # Approximate duration in minutes
+    title = f"Focus Score — Session Summary\nAvg: {avg_score:.1f} | Range: {min_score:.1f} - {max_score:.1f} | Duration: ~{session_duration:.1f}min"
+    ax.set_title(title, fontsize=14, pad=20)
+    
+    ax.set_xlabel("Time", fontsize=12)
+    ax.set_ylabel("Focus Score (0–100)", fontsize=12)
     ax.set_ylim(0, 100)
     ax.grid(alpha=0.4, linestyle="--")
+    ax.legend(loc='upper right', framealpha=0.9)
+    
+    # Add text box with detailed statistics
+    stats_text = f"📊 Session Statistics:\n"
+    stats_text += f"• Average Score: {avg_score:.1f}\n"
+    stats_text += f"• Highest Score: {max_score:.1f}\n"
+    stats_text += f"• Lowest Score: {min_score:.1f}\n"
+    stats_text += f"• Total Measurements: {len(y)}"
+    
+    # Position text box in the lower left corner
+    ax.text(0.02, 0.02, stats_text, transform=ax.transAxes, 
+            verticalalignment='bottom', fontsize=10,
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
     # reduce x-ticks if too many
     if len(x) > 30:
         step = max(1, len(x) // 20)
