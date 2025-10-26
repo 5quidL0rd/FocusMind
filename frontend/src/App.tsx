@@ -589,6 +589,10 @@ function App() {
     setPomodoroTime(30); // Reset to 30 seconds for quick testing
     setIsBreakTime(false); // Exit break mode when resetting
     sessionIncrementedRef.current = false; // Reset session increment flag
+    // Stop face tracking when resetting Pomodoro
+    if (faceTrackingActive) {
+      stopFaceTracking();
+    }
   };
 
   // Face Tracking Functions

@@ -27,6 +27,7 @@ focus_score_history = []
 # Global face tracking variables
 face_tracker = None
 tracking_active = False
+face_tracking_process = None  # Store the subprocess
 
 # Global auto-motivation state
 last_auto_motivation = {
@@ -38,9 +39,6 @@ last_auto_motivation = {
 
 # Load environment variables from .env file
 load_dotenv()
-
-# Cross-platform Python executable for subprocesses
-PYTHON_CMD = "python" if os.name == "nt" else "python3"
 
 app = FastAPI(title="FocusMind API", description="Motivational Study Coach API")
 
@@ -54,29 +52,18 @@ app.mount("/audio", StaticFiles(directory="audio_files"), name="audio")
 # Add CORS middleware to allow React frontend to connect
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        # React dev server on multiple ports (localhost)
-        "http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3003",
-        "http://localhost:3004", "http://localhost:3005", "http://localhost:3006", "http://localhost:3007", "http://localhost:3008",
-        # 127.0.0.1 variants
-        "http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:3002", "http://127.0.0.1:3003",
-        "http://127.0.0.1:3004", "http://127.0.0.1:3005", "http://127.0.0.1:3006", "http://127.0.0.1:3007", "http://127.0.0.1:3008",
-    ],  # React dev server on multiple ports
+    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3003", "http://localhost:3004", "http://localhost:3005", "http://localhost:3006", "http://localhost:3007", "http://localhost:3008"],  # React dev server on multiple ports
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize OpenAI client (optional; frontend will still work with fallback if missing)
+# Initialize OpenAI client
 api_key = os.getenv("OPENAI_API_KEY")
-client: OpenAI | None = None
-if api_key:
-    try:
-        client = OpenAI(api_key=api_key)
-    except Exception as e:
-        print(f"⚠️ Failed to initialize OpenAI client, will use fallback messages. Error: {e}")
-else:
-    print("⚠️ OPENAI_API_KEY not set. Using fallback motivational messages.")
+if not api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is required")
+
+client = OpenAI(api_key=api_key)
 
 class MotivationResponse(BaseModel):
     message: str
@@ -105,32 +92,22 @@ async def get_motivation(reset: bool = False):
             "focus_score": attention_score
         })
     
-    # Try OpenAI first if client is initialized; otherwise use fallback
     try:
-        if client is not None:
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are a study coach loosely inspired by David Goggins. Give intense, motivational study advice in a strictly PG version of his style. (No swearing). Keep it under 30 words."},
-                    {"role": "user", "content": "Give me motivation to study hard"}
-                ],
-                max_tokens=150,
-            )
-            message = response.choices[0].message.content
-        else:
-            raise RuntimeError("OpenAI client not initialized")
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a study coach loosely inspired by David Goggins. Give intense, motivational study advice in a strictly PG version of his style. (No swearing). Keep it under 30 words."},
+                {"role": "user", "content": "Give me motivation to study hard"}
+            ],
+            max_tokens=150
+        )
+        
+        message = response.choices[0].message.content
+        
+        return MotivationResponse(message=message, attention_score=attention_score)
+        
     except Exception as e:
-        print(f"⚠️ OpenAI API failed or unavailable, using fallback. Error: {e}")
-        fallback_messages = [
-            "Stay hard! Your future self is counting on you right now!",
-            "Every second of focus gets you closer to your goals. Stay disciplined!",
-            "Stop making excuses. You have everything you need to succeed!",
-            "Your mind wants to quit, but your dreams are bigger than your excuses!",
-            "Focus is your superpower. Use it to build the life you want!",
-        ]
-        message = random.choice(fallback_messages)
-
-    return MotivationResponse(message=message, attention_score=attention_score)
+        raise HTTPException(status_code=500, detail=f"Error generating motivation: {str(e)}")
 
 @app.get("/attention-score")
 async def get_attention_score():
@@ -219,7 +196,7 @@ async def get_voice_nudge():
     try:
         # Run nudge.py script with 'voice' argument and current attention score
         result = subprocess.run(
-            [PYTHON_CMD, "nudge.py", "voice", str(attention_score)], 
+            ["python3", "nudge.py", "voice", str(attention_score)], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -260,7 +237,7 @@ async def generate_voice_audio(request: VoiceAudioRequest):
     try:
         # Use nudge.py to generate audio for the provided message
         result = subprocess.run(
-            [PYTHON_CMD, "nudge.py", "generate_audio", request.message], 
+            ["python3", "nudge.py", "generate_audio", request.message], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -297,7 +274,7 @@ async def get_notification_nudge():
     try:
         # Run nudge.py script with 'notification' argument and current attention score
         result = subprocess.run(
-            [PYTHON_CMD, "nudge.py", "notification", str(attention_score)], 
+            ["python3", "nudge.py", "notification", str(attention_score)], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -330,7 +307,7 @@ async def get_break_nudge():
     try:
         # Run nudge.py script with 'break' argument (no attention score needed for breaks)
         result = subprocess.run(
-            [PYTHON_CMD, "nudge.py", "break"], 
+            ["python3", "nudge.py", "break"], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -411,7 +388,7 @@ async def trigger_auto_motivation(request: AutoMotivationTrigger):
         
         # Run nudge.py script with 'voice' argument and current attention score
         result = subprocess.run(
-            [PYTHON_CMD, "nudge.py", "voice", str(int(request.focus_score))], 
+            ["python3", "nudge.py", "voice", str(int(request.focus_score))], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -483,23 +460,88 @@ async def get_face_tracking_status():
 
 @app.post("/start-face-tracking")
 async def start_face_tracking():
-    """Start the face tracking system (placeholder for future implementation)"""
-    # This could be enhanced to actually start the face tracking process
-    # For now, it's a placeholder that the frontend can call
-    return {
-        "success": True,
-        "message": "Face tracking start signal sent. Please run face_focus_tracker.py manually.",
-        "command": f"{PYTHON_CMD} face_focus_tracker.py --source 0"
-    }
+    """Start the face tracking system automatically"""
+    global face_tracking_process, tracking_active
+    
+    try:
+        # Check if already running
+        if face_tracking_process is not None and face_tracking_process.poll() is None:
+            return {
+                "success": False,
+                "message": "Face tracking is already running",
+                "already_running": True
+            }
+        
+        # Start face tracking process
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        face_tracking_process = subprocess.Popen(
+            ["python3", "face_focus_tracker.py", "--source", "0", "--backend", "http://localhost:8000", "--interval", "7.0"],
+            cwd=script_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True  # Run in new session so it doesn't get killed with parent
+        )
+        
+        tracking_active = True
+        print(f"🚀 Face tracking process started with PID: {face_tracking_process.pid}")
+        
+        return {
+            "success": True,
+            "message": "Face tracking started successfully!",
+            "pid": face_tracking_process.pid
+        }
+        
+    except Exception as e:
+        print(f"❌ Error starting face tracking: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Failed to start face tracking: {str(e)}"
+        }
 
 @app.post("/stop-face-tracking")
 async def stop_face_tracking():
-    """Stop the face tracking system (placeholder for future implementation)"""
-    # This could be enhanced to actually stop the face tracking process
-    return {
-        "success": True,
-        "message": "Face tracking stop signal sent."
-    }
+    """Stop the face tracking system"""
+    global face_tracking_process, tracking_active
+    
+    try:
+        if face_tracking_process is None or face_tracking_process.poll() is not None:
+            tracking_active = False
+            return {
+                "success": True,
+                "message": "Face tracking is not running",
+                "was_running": False
+            }
+        
+        # Terminate the process
+        print(f"🛑 Stopping face tracking process (PID: {face_tracking_process.pid})")
+        face_tracking_process.terminate()
+        
+        # Wait a bit for graceful shutdown
+        try:
+            face_tracking_process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            # Force kill if it doesn't stop gracefully
+            print(f"⚠️ Force killing face tracking process")
+            face_tracking_process.kill()
+            face_tracking_process.wait()
+        
+        face_tracking_process = None
+        tracking_active = False
+        print(f"✅ Face tracking stopped successfully")
+        
+        return {
+            "success": True,
+            "message": "Face tracking stopped successfully"
+        }
+        
+    except Exception as e:
+        print(f"❌ Error stopping face tracking: {str(e)}")
+        face_tracking_process = None
+        tracking_active = False
+        return {
+            "success": False,
+            "message": f"Error stopping face tracking: {str(e)}"
+        }
 
 @app.post("/mark-auto-motivation-played")
 async def mark_auto_motivation_played():

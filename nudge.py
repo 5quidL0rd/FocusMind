@@ -120,6 +120,9 @@ def voice_nudge(attention_score=100):
         
 Based on this score, use {intensity} motivation. {approach}
 
+CRITICAL: EVERY message MUST start with "Dude, I see you slacking off! " followed by a space, then continue with the rest of the short motivational message.
+ALSO: The message should not reference the user's attention score numerical directly. 
+
 Guidelines:
 - If score is 80+: Gentle encouragement to stay on track
 - If score is 60-79: Firm reminder to refocus  
