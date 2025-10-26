@@ -41,7 +41,9 @@ last_auto_motivation = {
 load_dotenv()
 
 # Cross-platform Python executable for subprocesses
-PYTHON_CMD = "python" if os.name == "nt" else "python3"
+# Use sys.executable to get the current Python interpreter (works with venv)
+import sys
+PYTHON_CMD = sys.executable
 
 app = FastAPI(title="FocusMind API", description="Motivational Study Coach API")
 
