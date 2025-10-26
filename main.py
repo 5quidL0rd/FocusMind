@@ -40,6 +40,9 @@ last_auto_motivation = {
 # Load environment variables from .env file
 load_dotenv()
 
+# Cross-platform Python executable for subprocesses
+PYTHON_CMD = "python" if os.name == "nt" else "python3"
+
 app = FastAPI(title="FocusMind API", description="Motivational Study Coach API")
 
 # Create audio directory if it doesn't exist
@@ -224,7 +227,7 @@ async def get_voice_nudge():
     try:
         # Run nudge.py script with 'voice' argument and current attention score
         result = subprocess.run(
-            ["python3", "nudge.py", "voice", str(attention_score)], 
+            [PYTHON_CMD, "nudge.py", "voice", str(attention_score)], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -265,7 +268,7 @@ async def generate_voice_audio(request: VoiceAudioRequest):
     try:
         # Use nudge.py to generate audio for the provided message
         result = subprocess.run(
-            ["python3", "nudge.py", "generate_audio", request.message], 
+            [PYTHON_CMD, "nudge.py", "generate_audio", request.message], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -302,7 +305,7 @@ async def get_notification_nudge():
     try:
         # Run nudge.py script with 'notification' argument and current attention score
         result = subprocess.run(
-            ["python3", "nudge.py", "notification", str(attention_score)], 
+            [PYTHON_CMD, "nudge.py", "notification", str(attention_score)], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -335,7 +338,7 @@ async def get_break_nudge():
     try:
         # Run nudge.py script with 'break' argument (no attention score needed for breaks)
         result = subprocess.run(
-            ["python3", "nudge.py", "break"], 
+            [PYTHON_CMD, "nudge.py", "break"], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -416,7 +419,7 @@ async def trigger_auto_motivation(request: AutoMotivationTrigger):
         
         # Run nudge.py script with 'voice' argument and current attention score
         result = subprocess.run(
-            ["python3", "nudge.py", "voice", str(int(request.focus_score))], 
+            [PYTHON_CMD, "nudge.py", "voice", str(int(request.focus_score))], 
             capture_output=True, 
             text=True, 
             cwd=os.path.dirname(os.path.abspath(__file__))
@@ -503,7 +506,7 @@ async def start_face_tracking():
         # Start face tracking process
         script_dir = os.path.dirname(os.path.abspath(__file__))
         face_tracking_process = subprocess.Popen(
-            ["python3", "face_focus_tracker.py", "--source", "0", "--backend", "http://localhost:8000", "--interval", "7.0"],
+            [PYTHON_CMD, "face_focus_tracker.py", "--source", "0", "--backend", "http://localhost:8000", "--interval", "5.0"],
             cwd=script_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
