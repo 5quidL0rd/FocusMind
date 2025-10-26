@@ -20,6 +20,20 @@ from face_track import (
     MODEL_POINTS
 )
 
+# Import eye calibration for personalized scoring
+try:
+    from eye_calibration import load_eye_calibration, normalize_ear_personalized
+    EYE_CALIBRATION_AVAILABLE = True
+    # Load calibration once at module level to avoid repeated file reads
+    _CACHED_EYE_CALIBRATION = None
+    try:
+        _CACHED_EYE_CALIBRATION = load_eye_calibration()
+    except:
+        pass
+except ImportError:
+    EYE_CALIBRATION_AVAILABLE = False
+    _CACHED_EYE_CALIBRATION = None
+
 
 # -------------------------
 # 1) Focus score calculator
@@ -36,84 +50,163 @@ def compute_focus_score(
     keys_per_30s: int,
     typing_active: bool,
     focus_trend: float,
-    prev_score: float
-) -> float:
+    prev_score: float,
+    sustained_focus_time: float = 0.0,
+    current_time: float = None
+) -> tuple:
     """
     Return a smooth focus score (0-100).
-    Improved version with more forgiving scoring and better recovery.
+    Face presence is MANDATORY - score goes to 0 when head is off screen.
     """
-    # More nuanced and balanced weights
-    w_face = 0.25      # Face presence (reduced from 0.35)
-    w_gaze = 0.25      # Gaze direction (reduced from 0.30)
-    w_eyes = 0.20      # Eye openness 
-    w_head = 0.15      # Head position (increased from 0.10)
-    w_blink = 0.08     # Blink rate (increased from 0.03)
-    w_typing = 0.07    # Typing activity (increased from 0.02)
+    # Face-dominant weights - face presence controls everything
+    w_face = 1.0       # Face presence is MANDATORY - 100% weight when absent
+    w_gaze = 0.40      # Gaze direction - important when face is present  
+    w_eyes = 0.30      # Eye behavior - important when face is present
+    w_head = 0.20      # Head position - moderate when face is present
+    w_blink = 0.10     # Blink rate - minimal when face is present
 
-    # Normalize sub-scores (0..1)
+    # MANDATORY FACE PRESENCE CHECK
     face_score = 1.0 if face_present else 0.0
+    
+    # If no face detected, return 0 immediately (with smooth transition)
+    if not face_present:
+        # Smooth transition to zero when face disappears
+        alpha = 0.15  # Gradual transition to zero
+        focus_score = (1.0 - alpha) * float(prev_score) + alpha * 0.0
+        return round(max(0.0, focus_score), 2), sustained_focus_time
 
-    # More nuanced eye scoring
+    # Eye scoring - More generous when eyes are open normally
     eye_score = float(max(0.0, min(1.0, eyes_open_ratio)))
-    if eyes_closed_duration > 3.0:  # Eyes closed for 3+ seconds
-        eye_score = max(0.6, eye_score - 0.2)  # Less harsh penalty, min 0.6 instead of 0.5
+    
+    # Apply a boost for normal eye openness to reward natural looking
+    if eye_score >= 0.6:  # If eyes are reasonably open
+        eye_score = min(1.0, eye_score * 1.2)  # 20% boost for normal eye openness
+    
+    if eyes_closed_duration > 3.0:  # Eyes closed for 3+ seconds - STRONG penalty
+        penalty_factor = min((eyes_closed_duration - 3.0) / 5.0, 0.7)  # Progressive penalty up to 70%
+        eye_score = max(0.2, eye_score - penalty_factor)  # Strong penalty after 3 seconds
+    # No penalty for brief closures (blinking, brief rests)
 
-    # More nuanced gaze scoring - less volatile
-    gaze_map = {"forward": 1.0, "down": 0.9, "up": 0.9, "left": 0.8, "right": 0.8}  # Less harsh differences
-    gaze_score = gaze_map.get(gaze_direction, 0.8)  # Higher default
-    # Gentle gaze away penalty
-    gaze_away_penalty = float(max(0.0, min(0.25, gaze_away_ratio)))  # Max 25% penalty (reduced)
+    # Gaze scoring - More forgiving and allows higher scores
+    gaze_map = {
+        "forward": 1.0,    # Perfect focus
+        "Center": 1.0,     # Also perfect
+        "down": 0.95,      # Minor penalty - allows note-taking
+        "up": 0.90,        # Slight penalty - less bouncy
+        "left": 0.70,      # Moderate penalty - distraction
+        "right": 0.70,     # Moderate penalty - distraction
+        "Away": 0.50       # Moderate penalty - less harsh for brief glances
+    }
+    gaze_score = gaze_map.get(gaze_direction, 0.90)  # Higher default for unknown directions
+    # Reduced additional gaze away penalty
+    gaze_away_penalty = float(max(0.0, min(0.10, gaze_away_ratio)))  # Reduced to 10% max penalty
     gaze_score *= (1.0 - gaze_away_penalty)
 
-    # More balanced head movement scoring - less sensitive
-    head_score = 1.0 - min(abs(head_yaw) / 120.0, 0.5)  # 120° tolerance, max 50% penalty (reduced)
-    # Gentle pitch penalty
-    if head_pitch < -45:  # Looking down significantly
-        head_score = max(0.6, head_score - 0.15)  # Gentler penalty, min 0.6
-    head_score = max(0.6, min(1.0, head_score))  # Higher minimum head score of 0.6
+    # Head position scoring - More responsive to moderate head movements
+    # Ideal head position gets high score, noticeable penalties for moderate turns
+    head_score = 1.0
+    
+    # Yaw (left/right) penalty - start penalizing earlier with more noticeable impact
+    if abs(head_yaw) > 5:  # Start penalizing after just 5 degrees (was 15)
+        yaw_penalty = min((abs(head_yaw) - 5) / 30.0, 0.60)  # Up to 60% penalty, more aggressive curve
+        head_score -= yaw_penalty
+    
+    # Pitch (up/down) penalty - more responsive to moderate movements
+    if head_pitch < -3:  # Looking down very slightly (was -5)
+        pitch_penalty = min((abs(head_pitch) - 3) / 35.0, 0.40)  # Up to 40% penalty for down movement
+        head_score -= pitch_penalty
+    elif head_pitch > 8:  # Looking up (was 10)
+        pitch_penalty = min((head_pitch - 8) / 30.0, 0.45)  # Up to 45% penalty for looking up
+        head_score -= pitch_penalty
+    
+    head_score = max(0.30, min(1.0, head_score))  # Allow lower scores for poor head position
 
-    # Simplified blink scoring - less sensitive
-    blink_score = 1.0 - min(abs(blink_rate - 20.0) / 80.0, 0.3)  # Even more forgiving range
-    blink_score = max(0.7, blink_score)  # Higher minimum blink score
+    # Blink scoring - very forgiving, natural behavior
+    optimal_blink_rate = 18.0  # Natural blink rate
+    blink_score = 1.0 - min(abs(blink_rate - optimal_blink_rate) / 50.0, 0.10)  # Very forgiving
+    blink_score = max(0.90, blink_score)  # High minimum - blinking is natural
 
-    # Typing score with moderate baseline
+    # Typing score - not heavily weighted since we're focusing on visual attention
     if typing_active:
-        typing_score = min(keys_per_30s / 15.0, 1.0)  # 15 keys/30s target
+        typing_score = min(keys_per_30s / 20.0, 1.0)  # 20 keys/30s target
     else:
-        typing_score = 0.6  # Moderate baseline when not typing
+        typing_score = 0.9  # High baseline - not typing doesn't hurt focus
+
+    # Face is present - calculate focus based on other factors
+    # Normalize weights for when face is present (face weight is handled separately)
+    total_weight = w_gaze + w_eyes + w_head + w_blink
+    normalized_weights = {
+        'gaze': w_gaze / total_weight,
+        'eyes': w_eyes / total_weight, 
+        'head': w_head / total_weight,
+        'blink': w_blink / total_weight
+    }
 
     weighted_sum = (
-        w_face * face_score +
-        w_gaze * gaze_score +
-        w_eyes * eye_score +
-        w_head * head_score +
-        w_blink * blink_score +
-        w_typing * typing_score
-    )
+        normalized_weights['gaze'] * gaze_score +
+        normalized_weights['eyes'] * eye_score +
+        normalized_weights['head'] * head_score +
+        normalized_weights['blink'] * blink_score
+    )  # Face presence is mandatory - only calculate other factors when face is present
 
-    # Much slower, more gradual EMA smoothing
-    raw_score = weighted_sum * 100.0
+    # Add much more aggressive baseline boost for genuine focus
+    # When all metrics are good, provide a substantial boost to get into 90-100 range
+    baseline_boost = 0.0
+    if (gaze_score >= 0.95 and eye_score >= 0.85 and 
+        head_score >= 0.80 and blink_score >= 0.85):
+        baseline_boost = 0.25  # 25% boost for excellent conditions - much more aggressive
+    elif (gaze_score >= 0.90 and eye_score >= 0.75 and 
+          head_score >= 0.65 and blink_score >= 0.80):
+        baseline_boost = 0.20  # 20% boost for good conditions - much more aggressive
+    elif (gaze_score >= 0.80 and eye_score >= 0.60 and 
+          head_score >= 0.50 and blink_score >= 0.75):
+        baseline_boost = 0.15  # 15% boost for decent conditions - much more aggressive
+
+    # Apply VERY gradual EMA smoothing for ultra-stable changes
+    raw_score = (weighted_sum + baseline_boost) * 100.0
     
-    # Very conservative adaptive smoothing for slow changes
+    # Debug output for troubleshooting low scores
+    if raw_score < 85.0:  # Only show debug when score is unexpectedly low
+        print(f"🔍 Debug - Low score ({raw_score:.1f}): gaze={gaze_score:.2f}, eye={eye_score:.2f}, head={head_score:.2f}, blink={blink_score:.2f}, boost={baseline_boost:.2f}")
+    
+    # Much more conservative smoothing to prevent bounciness
     if raw_score > prev_score:
-        alpha = 0.2  # Very slow improvement (was 0.6)
+        alpha = 0.08  # Very slow improvement rate - less bouncy
     else:
-        alpha = 0.15  # Very slow decline (was 0.5)
+        alpha = 0.05  # Very slow decline rate - ultra smooth
     
     focus_score = (1.0 - alpha) * float(prev_score) + alpha * raw_score
     
-    # Reduce bonuses to prevent sudden jumps
-    if focus_score > 85 and prev_score > 80:
-        focus_score = min(100.0, focus_score + 0.5)  # Tiny sustained bonus (was 1.5)
+    # SUSTAINED ATTENTION BOOST SYSTEM
+    # Track sustained focus time and provide gradual boosts for consistency
+    if current_time is None:
+        import time
+        current_time = time.perf_counter()
     
-    # Remove the high performance boost entirely to prevent jumps
-    # if focus_score > 85:
-    #     boost_factor = min(3.0, (focus_score - 85) * 0.3)
-    #     focus_score = min(100.0, focus_score + boost_factor)
-    #     print(f"🔧 After high performance boost: {focus_score:.1f}")
+    # Update sustained focus tracking
+    good_focus_threshold = 80.0  # Score threshold for "good focus"
+    new_sustained_time = sustained_focus_time
+    
+    if focus_score >= good_focus_threshold:
+        # Maintaining good focus - increment sustained time
+        new_sustained_time = sustained_focus_time + 1.0  # Roughly 1 second increment
+    else:
+        # Focus dropped - reset sustained time
+        new_sustained_time = 0.0
+    
+    # Apply sustained attention boosts
+    sustained_boost = 0.0
+    if new_sustained_time >= 10.0:  # After 10 seconds of sustained focus
+        # Progressive boost based on sustained time
+        # Boost starts small and grows gradually
+        boost_duration = min(new_sustained_time - 10.0, 60.0)  # Cap at 60 seconds of boost time
+        sustained_boost = min(boost_duration * 0.1, 5.0)  # Max 5 point boost after 50 seconds
+        
+        # Apply boost gradually to maintain smoothness
+        focus_score = min(100.0, focus_score + sustained_boost)
     
     focus_score = max(0.0, min(100.0, focus_score))
-    return round(focus_score, 2)
+    return round(focus_score, 2), new_sustained_time
 
 
 # -------------------------
@@ -121,7 +214,7 @@ def compute_focus_score(
 # -------------------------
 def compute_enhanced_face_metrics(landmarks_array, frame_shape, current_time, blink_state=None):
     """
-    Compute enhanced face metrics using face_track.py functions.
+    Compute enhanced face metrics using face_track.py functions with personalized eye calibration.
     
     Args:
         landmarks_array: numpy array of MediaPipe face landmarks (468 points)
@@ -144,7 +237,12 @@ def compute_enhanced_face_metrics(landmarks_array, frame_shape, current_time, bl
     
     # Compute accurate Eye Aspect Ratio using face_track functions
     ear = compute_average_ear(landmarks_array)
-    eyes_open_ratio = normalize_ear(ear)
+    
+    # Use personalized eye normalization if available
+    if EYE_CALIBRATION_AVAILABLE and _CACHED_EYE_CALIBRATION:
+        eyes_open_ratio = normalize_ear_personalized(ear, _CACHED_EYE_CALIBRATION)
+    else:
+        eyes_open_ratio = normalize_ear(ear)
     
     # Update blink metrics with proper hysteresis
     (blink_in_progress, blink_count, eyes_closed_start_time, 
@@ -219,7 +317,7 @@ def compute_focus_score_with_landmarks(landmarks_array, frame_shape, gaze_direct
     )
     
     # Use the enhanced metrics in the main focus score computation
-    focus_score = compute_focus_score(
+    result = compute_focus_score(
         face_present=face_present,
         eyes_open_ratio=enhanced_metrics['eyes_open_ratio'],
         eyes_closed_duration=enhanced_metrics['eyes_closed_duration'],
@@ -231,8 +329,12 @@ def compute_focus_score_with_landmarks(landmarks_array, frame_shape, gaze_direct
         keys_per_30s=0,  # Not tracking typing
         typing_active=False,  # Not tracking typing
         focus_trend=0.0,  # Could be enhanced
-        prev_score=prev_score
+        prev_score=prev_score,
+        sustained_focus_time=0.0,  # Default value for sustained time
+        current_time=current_time
     )
+    
+    focus_score, sustained_time = result  # Unpack the tuple
     
     return focus_score, updated_blink_state
 

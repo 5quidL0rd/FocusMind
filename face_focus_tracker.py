@@ -23,6 +23,13 @@ from face_tracking_utils import RIGHT_EYE, LEFT_EYE, get_eye_pts, eye_gaze_vecto
 from calibration import calibrate_user, load_calibration
 from FocusScore import compute_focus_score, compute_focus_score_with_landmarks
 
+# Import eye calibration for personalized scoring
+try:
+    from eye_calibration import load_eye_calibration, normalize_ear_personalized
+    EYE_CALIBRATION_AVAILABLE = True
+except ImportError:
+    EYE_CALIBRATION_AVAILABLE = False
+
 # Face tracking constants
 HEAD_POSE_LANDMARKS = [1, 152, 33, 263, 61, 291]
 LEFT_IRIS_INDICES = [468, 469, 470, 471, 472]
@@ -53,10 +60,25 @@ class FaceFocusTracker:
         self.force_calibrate = force_calibrate
         self.running = False
         
+        # Load eye calibration if available
+        self.eye_calibration = None
+        if EYE_CALIBRATION_AVAILABLE:
+            try:
+                self.eye_calibration = load_eye_calibration()
+                if self.eye_calibration:
+                    print("👁️ Personal eye calibration loaded")
+                else:
+                    print("⚠️ No eye calibration found - run 'python eye_calibration.py' for better accuracy")
+            except Exception as e:
+                print(f"⚠️ Could not load eye calibration: {e}")
+        
         # Focus tracking state
         self.current_focus_score = 100.0
         self.last_update_time = 0
         self.last_quote_threshold = 100  # Track last threshold that triggered a quote
+        
+        # Sustained attention tracking
+        self.sustained_focus_time = 0.0  # Time spent in good focus (80+)
         
         # Video capture and MediaPipe
         self.cap = None
@@ -105,14 +127,14 @@ class FaceFocusTracker:
             if not self.cap.isOpened():
                 raise RuntimeError(f"Cannot open video source: {source}")
             
-            # Initialize MediaPipe Face-Mesh
+            # Initialize MediaPipe Face-Mesh with higher sensitivity
             mp_face_mesh = mp.solutions.face_mesh
             self.face_mesh = mp_face_mesh.FaceMesh(
                 static_image_mode=False,
                 max_num_faces=1,
                 refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5,
+                min_detection_confidence=0.7,  # Increased from 0.5 for better detection
+                min_tracking_confidence=0.7,   # Increased from 0.5 for better tracking
             )
             
             self.smoother = GazeSmoother(alpha=0.3)
@@ -167,18 +189,33 @@ class FaceFocusTracker:
         return "neutral"
 
     def gaze_vector_to_label(self, vec):
-        """Convert smoothed eye gaze vector to directional label"""
+        """Convert smoothed eye gaze vector to directional label with improved sensitivity"""
         if not self.cfg:
             return "Center"
             
         dx, dy = vec
-        if dx < self.cfg["left_thresh"]:
+        
+        # More sensitive thresholds for better "away" detection
+        sensitivity_factor = 0.7  # Make thresholds 30% more sensitive
+        
+        left_thresh = self.cfg["left_thresh"] * sensitivity_factor
+        right_thresh = self.cfg["right_thresh"] * sensitivity_factor
+        top_thresh = self.cfg["top_thresh"] * sensitivity_factor  
+        down_thresh = self.cfg["down_thresh"] * sensitivity_factor
+        
+        # Additional extreme gaze detection for "Away"
+        extreme_threshold = 0.8  # Very far from center
+        
+        if abs(dx) > extreme_threshold or abs(dy) > extreme_threshold:
+            return "Away"  # Clearly looking away from screen
+            
+        if dx < left_thresh:
             return "Right"
-        if dx > self.cfg["right_thresh"]:
+        if dx > right_thresh:
             return "Left"
-        if dy < self.cfg["top_thresh"]:
+        if dy < top_thresh:
             return "Down"
-        if dy > self.cfg["down_thresh"]:
+        if dy > down_thresh:
             return "Up"
         
         return "Center"
@@ -199,6 +236,29 @@ class FaceFocusTracker:
             lm = results.multi_face_landmarks[0].landmark
             pts = landmarks_to_np_array(lm, frame.shape)
             
+            # ENHANCED FACE PRESENCE VALIDATION
+            # Check head pose to ensure person is actually facing camera
+            from face_track import estimate_head_orientation
+            head_orientation = estimate_head_orientation(pts, (h, w))
+            
+            if head_orientation:
+                head_pitch, head_yaw = head_orientation
+                
+                # Only flag as "face away" for extreme head positions
+                # Allow natural head movement during work
+                max_yaw = 100.0        # Very tolerant - only flag extreme turns
+                max_pitch_up = 50.0    # Very tolerant - looking way up
+                max_pitch_down = 80.0  # Very tolerant - looking way down
+                
+                if (abs(head_yaw) > max_yaw or 
+                    head_pitch > max_pitch_up or 
+                    head_pitch < -max_pitch_down):
+                    print(f"🔄 Head turned away: yaw={head_yaw:.1f}°, pitch={head_pitch:.1f}°")
+                    face_present = False  # Override face detection if head is turned away
+        
+        if face_present:
+            # Continue with normal face processing
+            
             # Extract eye data for gaze tracking
             right_pts = get_eye_pts(RIGHT_EYE, lm, w, h)
             left_pts = get_eye_pts(LEFT_EYE, lm, w, h)
@@ -214,9 +274,25 @@ class FaceFocusTracker:
             # Use enhanced face_track.py functions for accurate eye tracking
             from face_track import compute_average_ear, normalize_ear, update_blink_metrics
             
-            # Get accurate Eye Aspect Ratio
+            # Get accurate Eye Aspect Ratio with enhanced sensitivity
             ear = compute_average_ear(pts)
-            self.eyes_open_ratio = normalize_ear(ear)
+            
+            # Use personalized eye normalization if available
+            if self.eye_calibration:
+                self.eyes_open_ratio = normalize_ear_personalized(ear, self.eye_calibration)
+            else:
+                self.eyes_open_ratio = normalize_ear(ear)
+            
+            # Eye closure detection - less sensitive to avoid false positives
+            eye_closure_threshold = 0.15  # Much less sensitive - only for actual closures
+            if self.eyes_open_ratio < eye_closure_threshold:
+                if not hasattr(self, '_debug_eye_closure'):
+                    print(f"👁️ Eyes partially closed: {self.eyes_open_ratio:.3f}")
+                    self._debug_eye_closure = True
+            else:
+                if hasattr(self, '_debug_eye_closure'):
+                    print(f"👁️ Eyes reopened: {self.eyes_open_ratio:.3f}")
+                    delattr(self, '_debug_eye_closure')
             
             # Update blink metrics with proper tracking
             (self.blink_state['blink_in_progress'], 
@@ -309,8 +385,8 @@ class FaceFocusTracker:
                     face_present=metrics['face_present']
                 )
             else:
-                # Fallback to original method
-                new_focus_score = compute_focus_score(
+                # Fallback to original method with sustained attention
+                result = compute_focus_score(
                     face_present=metrics['face_present'],
                     eyes_open_ratio=metrics['eyes_open_ratio'],
                     eyes_closed_duration=metrics['eyes_closed_duration'],
@@ -322,12 +398,18 @@ class FaceFocusTracker:
                     keys_per_30s=0,  # Not tracking typing in this implementation
                     typing_active=False,  # Not tracking typing in this implementation
                     focus_trend=0.0,  # Could be enhanced to track trend
-                    prev_score=self.current_focus_score
+                    prev_score=self.current_focus_score,
+                    sustained_focus_time=self.sustained_focus_time,
+                    current_time=current_time
                 )
+                new_focus_score, self.sustained_focus_time = result
             
-            # Only print score changes if significant (>2 point change)
+            # Print score changes and sustained attention info
             if abs(new_focus_score - self.current_focus_score) > 2.0:
-                print(f"🎯 Focus score: {self.current_focus_score:.1f} → {new_focus_score:.1f}")
+                boost_info = ""
+                if self.sustained_focus_time >= 10.0:
+                    boost_info = f" (🔥 {self.sustained_focus_time:.0f}s sustained)"
+                print(f"🎯 Focus score: {self.current_focus_score:.1f} → {new_focus_score:.1f}{boost_info}")
             
             # Debug: Print eye tracking details every few seconds
             if abs(new_focus_score - self.current_focus_score) > 2.0:
@@ -442,9 +524,13 @@ class FaceFocusTracker:
                 pass
             
         # Draw HUD information
+        sustained_info = ""
+        if self.sustained_focus_time >= 10.0:
+            sustained_info = f" 🔥{self.sustained_focus_time:.0f}s"
+        
         hud_lines = [
             f"Face: {'Yes' if metrics['face_present'] else 'No'}",
-            f"Focus Score: {self.current_focus_score:.1f}%",
+            f"Focus Score: {self.current_focus_score:.1f}%{sustained_info}",
             f"Expression: {metrics['expression'] or '--'}",
             f"Eye openness: {metrics['eyes_open_ratio']:.3f}",
             f"Eyes closed: {metrics['eyes_closed_duration']:.2f}s",
@@ -552,8 +638,25 @@ def main():
     parser.add_argument("--no-video", action="store_true", help="Run without video display (headless)")
     parser.add_argument("--demo", action="store_true", help="Run in demo mode without camera (simulates focus tracking)")
     parser.add_argument("--calibrate", action="store_true", help="Force gaze calibration (otherwise uses defaults/saved)")
+    parser.add_argument("--calibrate-eyes", action="store_true", help="Calibrate personal eye shape for better accuracy")
     
     args = parser.parse_args()
+    
+    # If eye calibration requested, run that instead
+    if args.calibrate_eyes:
+        print("🎯 Starting eye calibration process...")
+        if EYE_CALIBRATION_AVAILABLE:
+            import subprocess
+            import sys
+            result = subprocess.run([sys.executable, "eye_calibration.py"])
+            if result.returncode == 0:
+                print("✅ Eye calibration completed successfully!")
+                print("Now run the tracker again to use your personalized settings.")
+            else:
+                print("❌ Eye calibration failed")
+        else:
+            print("❌ Eye calibration module not available")
+        return
     
     # Convert source to int if it's a digit
     source = int(args.source) if args.source.isdigit() else args.source
