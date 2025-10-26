@@ -21,7 +21,7 @@ import numpy as np
 from ema_smoother import GazeSmoother
 from face_tracking_utils import RIGHT_EYE, LEFT_EYE, get_eye_pts, eye_gaze_vector, landmarks_to_np_array
 from calibration import calibrate_user, load_calibration
-from FocusScore import compute_focus_score
+from FocusScore import compute_focus_score, compute_focus_score_with_landmarks
 
 # Face tracking constants
 HEAD_POSE_LANDMARKS = [1, 152, 33, 263, 61, 291]
@@ -70,6 +70,15 @@ class FaceFocusTracker:
         self.blink_in_progress = False
         self.blink_count = 0
         self.session_start_time = 0
+        
+        # Enhanced blink state for face_track.py integration
+        self.blink_state = {
+            'blink_in_progress': False,
+            'blink_count': 0,
+            'eyes_closed_start_time': None,
+            'eyes_closed_duration': 0.0,
+            'last_reset_time': 0.0
+        }
         
         # Rolling buffers for smoothing
         self.eye_horizontal_history = deque(maxlen=5)
@@ -190,7 +199,7 @@ class FaceFocusTracker:
             lm = results.multi_face_landmarks[0].landmark
             pts = landmarks_to_np_array(lm, frame.shape)
             
-            # Extract eye data
+            # Extract eye data for gaze tracking
             right_pts = get_eye_pts(RIGHT_EYE, lm, w, h)
             left_pts = get_eye_pts(LEFT_EYE, lm, w, h)
             
@@ -202,46 +211,44 @@ class FaceFocusTracker:
             smoothed_vec = self.smoother.update(raw_vec)
             self.gaze_label = self.gaze_vector_to_label(smoothed_vec)
             
-            # Calculate eye openness ratio
-            # This is a simplified calculation - you may want to enhance this
-            left_eye_height = np.linalg.norm(pts[159] - pts[145])   # Left eye vertical
-            right_eye_height = np.linalg.norm(pts[386] - pts[374])  # Right eye vertical
-            avg_eye_height = (left_eye_height + right_eye_height) / 2
+            # Use enhanced face_track.py functions for accurate eye tracking
+            from face_track import compute_average_ear, normalize_ear, update_blink_metrics
             
-            # Normalize eye openness (you may need to adjust these thresholds)
-            self.eyes_open_ratio = min(avg_eye_height / 8.0, 1.0)  # Adjust divisor as needed
+            # Get accurate Eye Aspect Ratio
+            ear = compute_average_ear(pts)
+            self.eyes_open_ratio = normalize_ear(ear)
+            
+            # Update blink metrics with proper tracking
+            (self.blink_state['blink_in_progress'], 
+             self.blink_state['blink_count'], 
+             self.blink_state['eyes_closed_start_time'], 
+             self.blink_state['eyes_closed_duration'], 
+             blink_detected) = update_blink_metrics(
+                self.eyes_open_ratio,
+                current_time,
+                self.blink_state['blink_in_progress'],
+                self.blink_state['blink_count'],
+                self.blink_state['eyes_closed_start_time'],
+                self.blink_state['eyes_closed_duration']
+            )
+            
+            # Update session blink count for rate calculation
+            if blink_detected:
+                self.blink_count += 1
+            
+            # Use the properly tracked eyes closed duration
+            self.eyes_closed_duration = self.blink_state['eyes_closed_duration']
             
             # Detect expression
             self.expression = self.infer_expression(pts)
             
-            # Track eyes closed duration
-            if self.eyes_open_ratio < 0.3:  # Eyes considered closed
-                if self.eyes_closed_start_time is None:
-                    self.eyes_closed_start_time = current_time
-                self.eyes_closed_duration = current_time - self.eyes_closed_start_time
-                
-                if not self.blink_in_progress and self.eyes_closed_duration > 0.1:
-                    self.blink_count += 1
-                    self.blink_in_progress = True
+            # Calculate head pose using enhanced functions
+            from face_track import estimate_head_orientation
+            head_orientation = estimate_head_orientation(pts, (h, w))
+            if head_orientation:
+                head_pitch, head_yaw = head_orientation
             else:
-                self.eyes_closed_start_time = None
-                self.eyes_closed_duration = 0.0
-                self.blink_in_progress = False
-            
-            # Calculate head pose (simplified)
-            # In a full implementation, you'd use cv2.solvePnP for accurate head pose
-            nose_tip = pts[1]
-            chin = pts[152]
-            left_eye = pts[33]
-            right_eye = pts[263]
-            
-            # Simple head direction based on eye positions relative to nose
-            head_center_x = (left_eye[0] + right_eye[0]) / 2
-            head_tilt = (nose_tip[0] - head_center_x) / w * 100  # Normalize to percentage
-            
-            # Calculate pitch and yaw (simplified)
-            head_pitch = 0.0  # Placeholder - would need proper 3D calculation
-            head_yaw = head_tilt
+                head_pitch, head_yaw = 0.0, 0.0
             
             # Store in history for smoothing
             self.head_pitch_history.append(head_pitch)
@@ -260,9 +267,15 @@ class FaceFocusTracker:
             head_pitch = 0.0
             head_yaw = 0.0
         
-        # Calculate blink rate
-        elapsed_minutes = max((current_time - self.session_start_time) / 60.0, 1e-6)
-        blink_rate = (self.blink_count / elapsed_minutes) if self.blink_count else 0.0
+        # Calculate blink rate using the enhanced tracking
+        time_elapsed = current_time - self.blink_state.get('last_reset_time', self.session_start_time)
+        if time_elapsed >= 60.0:  # Reset every minute
+            blink_rate = (self.blink_state['blink_count'] / time_elapsed) * 60.0
+            self.blink_state['blink_count'] = 0
+            self.blink_state['last_reset_time'] = current_time
+        else:
+            # Estimate current rate
+            blink_rate = (self.blink_state['blink_count'] / max(time_elapsed, 1.0)) * 60.0
         
         return {
             'face_present': face_present,
@@ -273,31 +286,52 @@ class FaceFocusTracker:
             'head_pitch': head_pitch,
             'head_yaw': head_yaw,
             'blink_rate': blink_rate,
-            'expression': self.expression
+            'expression': self.expression,
+            'landmarks_array': pts if face_present else None,
+            'frame_shape': (h, w)
         }
 
-    def compute_and_update_focus_score(self, metrics):
-        """Compute focus score using FocusScore.py and update backend if needed"""
+    def compute_and_update_focus_score(self, metrics, landmarks_array=None, frame_shape=None):
+        """Compute focus score using enhanced FocusScore.py functions and update backend if needed"""
         try:
-            # Use FocusScore.py to compute the focus score
-            new_focus_score = compute_focus_score(
-                face_present=metrics['face_present'],
-                eyes_open_ratio=metrics['eyes_open_ratio'],
-                eyes_closed_duration=metrics['eyes_closed_duration'],
-                gaze_direction=metrics['gaze_direction'],
-                gaze_away_ratio=metrics['gaze_away_ratio'],
-                head_pitch=metrics['head_pitch'],
-                head_yaw=metrics['head_yaw'],
-                blink_rate=metrics['blink_rate'],
-                keys_per_30s=0,  # Not tracking typing in this implementation
-                typing_active=False,  # Not tracking typing in this implementation
-                focus_trend=0.0,  # Could be enhanced to track trend
-                prev_score=self.current_focus_score
-            )
+            current_time = time.perf_counter()
+            
+            # Use enhanced face tracking if landmarks are available
+            if landmarks_array is not None and frame_shape is not None:
+                new_focus_score, self.blink_state = compute_focus_score_with_landmarks(
+                    landmarks_array=landmarks_array,
+                    frame_shape=frame_shape,
+                    gaze_direction=metrics['gaze_direction'],
+                    gaze_away_ratio=metrics['gaze_away_ratio'],
+                    current_time=current_time,
+                    prev_score=self.current_focus_score,
+                    blink_state=self.blink_state,
+                    face_present=metrics['face_present']
+                )
+            else:
+                # Fallback to original method
+                new_focus_score = compute_focus_score(
+                    face_present=metrics['face_present'],
+                    eyes_open_ratio=metrics['eyes_open_ratio'],
+                    eyes_closed_duration=metrics['eyes_closed_duration'],
+                    gaze_direction=metrics['gaze_direction'],
+                    gaze_away_ratio=metrics['gaze_away_ratio'],
+                    head_pitch=metrics['head_pitch'],
+                    head_yaw=metrics['head_yaw'],
+                    blink_rate=metrics['blink_rate'],
+                    keys_per_30s=0,  # Not tracking typing in this implementation
+                    typing_active=False,  # Not tracking typing in this implementation
+                    focus_trend=0.0,  # Could be enhanced to track trend
+                    prev_score=self.current_focus_score
+                )
             
             # Only print score changes if significant (>2 point change)
             if abs(new_focus_score - self.current_focus_score) > 2.0:
                 print(f"🎯 Focus score: {self.current_focus_score:.1f} → {new_focus_score:.1f}")
+            
+            # Debug: Print eye tracking details every few seconds
+            if abs(new_focus_score - self.current_focus_score) > 2.0:
+                print(f"👁️ Eye openness: {metrics['eyes_open_ratio']:.3f}, Eyes closed: {metrics['eyes_closed_duration']:.2f}s, Blinks: {self.blink_state['blink_count']}")
             
             self.current_focus_score = new_focus_score
             
@@ -359,16 +393,66 @@ class FaceFocusTracker:
         """Draw focus tracking overlay on video frame"""
         if not self.show_video:
             return
+        
+        # Draw facial landmarks if face is present
+        if metrics['face_present'] and metrics.get('landmarks_array') is not None:
+            pts = metrics['landmarks_array']
+            
+            # Draw key facial landmarks (green dots like in face_track.py)
+            # Eye corners and vertical points - Green for eye tracking
+            for idx in (159, 145, 386, 374, 33, 133, 362, 263):
+                cv2.circle(frame, tuple(pts[idx].astype(int)), 2, (0, 255, 0), -1)
+            
+            # Mouth corners and center points - Green 
+            for idx in (61, 291, 13, 14):
+                cv2.circle(frame, tuple(pts[idx].astype(int)), 2, (0, 255, 0), -1)
+            
+            # Head pose landmarks - Red for head tracking
+            for idx in [1, 152, 33, 263, 61, 291]:  # HEAD_POSE_LANDMARKS
+                cv2.circle(frame, tuple(pts[idx].astype(int)), 3, (0, 0, 255), -1)
+            
+            # Face contour points - Blue for face boundary
+            face_contour = [10, 151, 9, 8, 168, 6, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+            for idx in face_contour[::3]:  # Every 3rd point to avoid clutter
+                cv2.circle(frame, tuple(pts[idx].astype(int)), 1, (255, 0, 0), -1)
+            
+            # Nose tip and bridge - Yellow for nose tracking
+            for idx in [1, 2, 5, 4, 6, 19, 20, 94, 125]:
+                cv2.circle(frame, tuple(pts[idx].astype(int)), 2, (0, 255, 255), -1)
+            
+            # Draw eye regions if available
+            try:
+                from face_tracking_utils import RIGHT_EYE, LEFT_EYE, get_eye_pts
+                h, w = frame.shape[:2]
+                
+                # Convert landmarks to format expected by get_eye_pts
+                lm_list = []
+                for point in pts:
+                    lm_list.append(type('obj', (object,), {'x': point[0]/w, 'y': point[1]/h})())
+                
+                # Draw eye points
+                right_pts = get_eye_pts(RIGHT_EYE, lm_list, w, h)
+                left_pts = get_eye_pts(LEFT_EYE, lm_list, w, h)
+                
+                for pt in (right_pts["outer"], right_pts["inner"], right_pts["iris"],
+                          left_pts["outer"], left_pts["inner"], left_pts["iris"]):
+                    cv2.circle(frame, tuple(pt.astype(int)), 2, (255, 255, 0), -1)  # Cyan for eyes
+            except Exception as e:
+                # Fallback to basic eye landmark drawing if get_eye_pts fails
+                pass
             
         # Draw HUD information
         hud_lines = [
             f"Face: {'Yes' if metrics['face_present'] else 'No'}",
             f"Focus Score: {self.current_focus_score:.1f}%",
             f"Expression: {metrics['expression'] or '--'}",
-            f"Eye openness: {metrics['eyes_open_ratio']:.2f}",
-            f"Eyes closed: {metrics['eyes_closed_duration']:.1f}s",
+            f"Eye openness: {metrics['eyes_open_ratio']:.3f}",
+            f"Eyes closed: {metrics['eyes_closed_duration']:.2f}s",
             f"Blink rate: {metrics['blink_rate']:.1f}/min",
-            f"Gaze: {metrics['gaze_direction']}"
+            f"Blink count: {self.blink_state['blink_count']}",
+            f"Gaze: {metrics['gaze_direction']}",
+            f"Head pitch: {metrics['head_pitch']:.1f}°",
+            f"Head yaw: {metrics['head_yaw']:.1f}°"
         ]
         
         # Color code based on focus score
@@ -412,6 +496,9 @@ class FaceFocusTracker:
         self.running = True
         self.session_start_time = time.perf_counter()
         
+        # Initialize blink state with current time
+        self.blink_state['last_reset_time'] = self.session_start_time
+        
         print("📹 Face tracking started - monitoring focus...")
         print("Press ESC to stop tracking")
         
@@ -425,8 +512,12 @@ class FaceFocusTracker:
                 # Process frame and get focus metrics
                 metrics = self.process_frame(frame)
                 
-                # Compute and update focus score
-                self.compute_and_update_focus_score(metrics)
+                # Compute and update focus score with enhanced landmarks
+                self.compute_and_update_focus_score(
+                    metrics, 
+                    landmarks_array=metrics.get('landmarks_array'),
+                    frame_shape=metrics.get('frame_shape')
+                )
                 
                 # Draw overlay if video display is enabled
                 if self.show_video:

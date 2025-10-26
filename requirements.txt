@@ -20,8 +20,8 @@ httpcore==1.0.9
 
 # Computer Vision and Face Tracking
 opencv-python==4.9.0.80
-mediapipe==0.10.21
-numpy==1.24.3
+mediapipe==0.10.9
+numpy==1.26.4
 
 # Data Processing and Analytics
 matplotlib==3.7.1

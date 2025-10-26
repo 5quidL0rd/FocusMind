@@ -29,3 +29,6 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local batch files (Windows-specific, don't push to GitHub)
+*.bat

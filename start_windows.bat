@@ -15,13 +15,13 @@ taskkill /f /im python.exe 2>nul
 taskkill /f /im node.exe 2>nul
 
 echo 🔧 Starting backend server...
-start "FocusMind Backend" cmd /k "focusmind_env\Scripts\activate.bat && py main.py"
+start "FocusMind Backend" cmd /k "focusmind_env\Scripts\activate.bat && python main.py"
 
 REM Wait for backend to start
 timeout /t 3 /nobreak >nul
 
 echo 📹 Starting face tracking with camera...
-start "Face Tracking" cmd /k "focusmind_env\Scripts\activate.bat && py face_focus_tracker.py --source 0"
+start "Face Tracking" cmd /k "focusmind_env\Scripts\activate.bat && python face_focus_tracker.py --source 0"
 
 echo 🎨 Starting frontend...
 start "FocusMind Frontend" cmd /k "cd frontend && npm start"

@@ -9,6 +9,17 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
+# Import crucial functions from face_track.py for enhanced metrics
+from face_track import (
+    compute_average_ear, 
+    normalize_ear, 
+    update_blink_metrics,
+    estimate_head_orientation,
+    rotation_matrix_to_euler_angles,
+    HEAD_POSE_LANDMARKS,
+    MODEL_POINTS
+)
+
 
 # -------------------------
 # 1) Focus score calculator
@@ -103,6 +114,127 @@ def compute_focus_score(
     
     focus_score = max(0.0, min(100.0, focus_score))
     return round(focus_score, 2)
+
+
+# -------------------------
+# 1.5) Enhanced face tracking integration functions
+# -------------------------
+def compute_enhanced_face_metrics(landmarks_array, frame_shape, current_time, blink_state=None):
+    """
+    Compute enhanced face metrics using face_track.py functions.
+    
+    Args:
+        landmarks_array: numpy array of MediaPipe face landmarks (468 points)
+        frame_shape: tuple of (height, width) of the frame
+        current_time: current timestamp
+        blink_state: dict with blink tracking state (optional)
+    
+    Returns:
+        dict with enhanced metrics including accurate blink rate and head pose
+    """
+    # Initialize blink state if not provided
+    if blink_state is None:
+        blink_state = {
+            'blink_in_progress': False,
+            'blink_count': 0,
+            'eyes_closed_start_time': None,
+            'eyes_closed_duration': 0.0,
+            'last_reset_time': current_time
+        }
+    
+    # Compute accurate Eye Aspect Ratio using face_track functions
+    ear = compute_average_ear(landmarks_array)
+    eyes_open_ratio = normalize_ear(ear)
+    
+    # Update blink metrics with proper hysteresis
+    (blink_in_progress, blink_count, eyes_closed_start_time, 
+     eyes_closed_duration, blink_detected) = update_blink_metrics(
+        eyes_open_ratio,
+        current_time,
+        blink_state['blink_in_progress'],
+        blink_state['blink_count'],
+        blink_state['eyes_closed_start_time'],
+        blink_state['eyes_closed_duration']
+    )
+    
+    # Update blink state
+    blink_state.update({
+        'blink_in_progress': blink_in_progress,
+        'blink_count': blink_count,
+        'eyes_closed_start_time': eyes_closed_start_time,
+        'eyes_closed_duration': eyes_closed_duration
+    })
+    
+    # Calculate blink rate (blinks per minute)
+    time_elapsed = current_time - blink_state['last_reset_time']
+    if time_elapsed >= 60.0:  # Reset every minute
+        blink_rate = (blink_count / time_elapsed) * 60.0
+        blink_state['blink_count'] = 0
+        blink_state['last_reset_time'] = current_time
+    else:
+        # Estimate current rate
+        blink_rate = (blink_count / max(time_elapsed, 1.0)) * 60.0
+    
+    # Compute accurate head pose using face_track functions
+    head_orientation = estimate_head_orientation(landmarks_array, frame_shape)
+    if head_orientation:
+        head_pitch, head_yaw = head_orientation
+    else:
+        head_pitch, head_yaw = 0.0, 0.0
+    
+    return {
+        'eyes_open_ratio': eyes_open_ratio,
+        'eyes_closed_duration': eyes_closed_duration,
+        'blink_rate': blink_rate,
+        'head_pitch': head_pitch,
+        'head_yaw': head_yaw,
+        'blink_detected': blink_detected,
+        'ear': ear
+    }, blink_state
+
+
+def compute_focus_score_with_landmarks(landmarks_array, frame_shape, gaze_direction, 
+                                     gaze_away_ratio, current_time, prev_score, 
+                                     blink_state=None, face_present=True):
+    """
+    Enhanced focus score computation using actual MediaPipe landmarks.
+    Integrates face_track.py functions for accurate blink and head pose detection.
+    
+    Args:
+        landmarks_array: numpy array of MediaPipe face landmarks
+        frame_shape: tuple of (height, width)
+        gaze_direction: string direction of gaze
+        gaze_away_ratio: float ratio of time looking away
+        current_time: current timestamp
+        prev_score: previous focus score
+        blink_state: blink tracking state
+        face_present: whether face is detected
+    
+    Returns:
+        tuple of (focus_score, updated_blink_state)
+    """
+    # Get enhanced metrics using face_track.py functions
+    enhanced_metrics, updated_blink_state = compute_enhanced_face_metrics(
+        landmarks_array, frame_shape, current_time, blink_state
+    )
+    
+    # Use the enhanced metrics in the main focus score computation
+    focus_score = compute_focus_score(
+        face_present=face_present,
+        eyes_open_ratio=enhanced_metrics['eyes_open_ratio'],
+        eyes_closed_duration=enhanced_metrics['eyes_closed_duration'],
+        gaze_direction=gaze_direction,
+        gaze_away_ratio=gaze_away_ratio,
+        head_pitch=enhanced_metrics['head_pitch'],
+        head_yaw=enhanced_metrics['head_yaw'],
+        blink_rate=enhanced_metrics['blink_rate'],
+        keys_per_30s=0,  # Not tracking typing
+        typing_active=False,  # Not tracking typing
+        focus_trend=0.0,  # Could be enhanced
+        prev_score=prev_score
+    )
+    
+    return focus_score, updated_blink_state
 
 
 # -------------------------
