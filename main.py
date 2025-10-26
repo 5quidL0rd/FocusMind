@@ -58,12 +58,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize OpenAI client
+# Initialize OpenAI client (optional; frontend will still work with fallback if missing)
 api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is required")
-
-client = OpenAI(api_key=api_key)
+client: OpenAI | None = None
+if api_key:
+    try:
+        client = OpenAI(api_key=api_key)
+        print("✅ OpenAI client initialized successfully")
+    except Exception as e:
+        print(f"⚠️ Failed to initialize OpenAI client, will use fallback messages. Error: {e}")
+        client = None
+else:
+    print("⚠️ OPENAI_API_KEY not set. Using fallback motivational messages.")
 
 class MotivationResponse(BaseModel):
     message: str
@@ -92,22 +98,44 @@ async def get_motivation(reset: bool = False):
             "focus_score": attention_score
         })
     
+    # Try OpenAI first if client is initialized; otherwise use fallback
     try:
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a study coach loosely inspired by David Goggins. Give intense, motivational study advice in a strictly PG version of his style. (No swearing). Keep it under 30 words."},
-                {"role": "user", "content": "Give me motivation to study hard"}
-            ],
-            max_tokens=150
-        )
-        
-        message = response.choices[0].message.content
+        if client is not None:
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a study coach loosely inspired by David Goggins. Give intense, motivational study advice in a strictly PG version of his style. (No swearing). Keep it under 30 words."},
+                    {"role": "user", "content": "Give me motivation to study hard"}
+                ],
+                max_tokens=150
+            )
+            message = response.choices[0].message.content
+        else:
+            # Use fallback messages when OpenAI client is not available
+            import random
+            fallback_messages = [
+                "Stay hard! Your future self is counting on you right now!",
+                "Every second of focus gets you closer to your goals. Stay disciplined!",
+                "Stop making excuses. You have everything you need to succeed!",
+                "Your mind wants to quit, but your dreams are bigger than your excuses!",
+                "Focus is your superpower. Use it to build the life you want!",
+            ]
+            message = random.choice(fallback_messages)
         
         return MotivationResponse(message=message, attention_score=attention_score)
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating motivation: {str(e)}")
+        print(f"⚠️ Error generating motivation: {str(e)}, using fallback")
+        import random
+        fallback_messages = [
+            "Stay hard! Your future self is counting on you right now!",
+            "Every second of focus gets you closer to your goals. Stay disciplined!",
+            "Stop making excuses. You have everything you need to succeed!",
+            "Your mind wants to quit, but your dreams are bigger than your excuses!",
+            "Focus is your superpower. Use it to build the life you want!",
+        ]
+        message = random.choice(fallback_messages)
+        return MotivationResponse(message=message, attention_score=attention_score)
 
 @app.get("/attention-score")
 async def get_attention_score():

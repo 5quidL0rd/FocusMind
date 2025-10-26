@@ -452,6 +452,12 @@ function App() {
     try {
       console.log('🍅 Pomodoro break time! Getting break nudge...');
       
+      // IMMEDIATELY try to get the focus chart - don't wait for audio!
+      console.log('📊 CALLING getFocusChart() IMMEDIATELY...');
+      setTimeout(() => {
+        getFocusChart();
+      }, 500);
+      
       // Set break time mode to prevent other nudges from interfering
       setIsBreakTime(true);
       
@@ -552,21 +558,30 @@ function App() {
 
   const getFocusChart = async () => {
     try {
-      console.log('📊 Fetching focus chart for completed session...');
+      console.log('📊 ========== FETCHING FOCUS CHART ==========');
+      console.log('📊 Calling /get-focus-chart endpoint...');
       
   const response = await axios.post<FocusChartResponse>(`/get-focus-chart`);
       
+      console.log('📊 Response received:', response.data);
+      console.log('📊 Success:', response.data.success);
+      console.log('📊 Data points:', response.data.data_points);
+      
       if (response.data.success) {
-        console.log('📈 Focus chart generated successfully!');
+        console.log('📈 ✅ Focus chart generated successfully!');
         console.log('📊 Session stats:', response.data.session_stats);
+        console.log('📊 Chart base64 length:', response.data.chart_base64?.length);
         
         setFocusChartData(response.data);
         setShowFocusChart(true);
+        console.log('📊 ✅✅✅ CHART MODAL SHOULD NOW BE VISIBLE! ✅✅✅');
       } else {
-        console.warn('⚠️ Focus chart generation failed:', response.data.error);
+        console.error('❌ Focus chart generation failed:', response.data.error);
+        alert(`Chart generation failed: ${response.data.error}`);
       }
     } catch (error) {
       console.error('❌ Error fetching focus chart:', error);
+      alert(`Error fetching chart: ${error}`);
     }
   };
 
@@ -991,6 +1006,14 @@ function App() {
       />
       
       {/* Focus Chart Modal */}
+      {(() => {
+        console.log('🔍 Modal render check:', { 
+          showFocusChart, 
+          hasFocusChartData: !!focusChartData,
+          dataPointsCount: focusChartData?.data_points
+        });
+        return null;
+      })()}
       {showFocusChart && focusChartData && (
         <div style={{
           position: 'fixed',
