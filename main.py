@@ -390,8 +390,8 @@ async def update_focus_score(request: FocusScoreUpdate):
     
     # Add to focus score history for analytics
     focus_score_history.append({
-        "timestamp": datetime.now(),
-        "score": attention_score
+        "timestamp": datetime.now().strftime("%H:%M:%S"),  # Format as string for chart
+        "focus_score": attention_score  # Changed from "score" to "focus_score" to match chart expectation
     })
     
     print(f"📊 Focus score updated: {attention_score}% (Total data points: {len(focus_score_history)})")

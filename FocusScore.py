@@ -402,20 +402,33 @@ def generate_focus_chart_base64(focus_data: List[Dict[str, Any]], dpi: int = 120
     - focus_data: list of {'timestamp': 'HH:MM:SS', 'focus_score': float}
     - returns (png_path, base64_bytes)
     The PNG is created in-memory and encoded to base64; png_path is a suggested filename.
+    WORKS WITH ANY NUMBER OF DATA POINTS - even just 1!
     """
     if not focus_data:
         raise ValueError("focus_data is empty")
 
+    print(f"🎨 Generating chart with {len(focus_data)} data points...")
+    
     df = pd.DataFrame(focus_data)
     # ensure chronological
     df = df.copy()
+    
+    # Handle timestamp
     try:
         # If timestamp strings, keep as labels; do not convert to datetime to keep tick labels readable
         x = list(df["timestamp"])
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ Timestamp issue: {e}, using indices instead")
         x = list(range(len(df)))
 
-    y = list(df["focus_score"])
+    # Handle focus_score
+    try:
+        y = list(df["focus_score"])
+    except Exception as e:
+        print(f"❌ ERROR: Could not find 'focus_score' column in data!")
+        print(f"Available columns: {df.columns.tolist()}")
+        print(f"Sample data: {focus_data[0] if focus_data else 'None'}")
+        raise
 
     # Calculate session statistics
     avg_score = sum(y) / len(y)
