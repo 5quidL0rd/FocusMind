@@ -43,7 +43,15 @@ app.mount("/audio", StaticFiles(directory="audio_files"), name="audio")
 # Add CORS middleware to allow React frontend to connect
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3003", "http://localhost:3004", "http://localhost:3005", "http://localhost:3006", "http://localhost:3007", "http://localhost:3008"],  # React dev server on multiple ports
+    allow_origins=["http://localhost:3000",
+                   "http://localhost:3001",
+                   "http://localhost:3002",
+                   "http://localhost:3003",
+                   "http://localhost:3004",
+                   "http://localhost:3005",
+                   "http://localhost:3006",
+                   "http://localhost:3007",
+                   "http://localhost:3008"],  # React dev server on multiple ports
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,0 +1,22 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile           # points to the FastAPI Dockerfile at repo root
+    container_name: focusmind_backend
+    ports:
+      - "5000:10000"                 # host:container (Render uses $PORT=10000)
+    environment:
+      - PORT=10000
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        REACT_APP_BACKEND_URL: http://localhost:5000   # local dev override
+    container_name: focusmind_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend

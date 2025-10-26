@@ -232,8 +232,8 @@ function App() {
     setLoading(true);
     try {
       const url = reset 
-        ? 'http://localhost:8000/motivation?reset=true'
-        : 'http://localhost:8000/motivation';
+        ? `${process.env.REACT_APP_BACKEND_URL}/motivation?reset=true`
+        : `${process.env.REACT_APP_BACKEND_URL}/motivation`;
       
       console.log(`📡 Fetching motivation from: ${url} (reset: ${reset})`);
       const response = await axios.get<MotivationData>(url);
@@ -255,7 +255,7 @@ function App() {
   const decreaseAttention = async () => {
     setLoading(true);
     try {
-      const response = await axios.post<AttentionResponse>('http://localhost:8000/decrease-attention');
+      const response = await axios.post<AttentionResponse>(`${process.env.REACT_APP_BACKEND_URL}/decrease-attention`);
       const newScore = response.data.attention_score;
       
       console.log(`🔢 Attention score changed: ${motivationData?.attention_score} → ${newScore}`);
@@ -291,7 +291,7 @@ function App() {
     
     try {
       console.log('🚀 Calling voice nudge...');
-      const response = await axios.post<NudgeResponse>('http://localhost:8000/get-voice-nudge');
+      const response = await axios.post<NudgeResponse>(`${process.env.REACT_APP_BACKEND_URL}/get-voice-nudge`);
       
       if (response.data.success && motivationData) {
         // Set visual indicator that nudge script executed
@@ -314,7 +314,7 @@ function App() {
         
         // Play audio if available
         if (response.data.audio_url) {
-          const audioUrl = `http://localhost:8000${response.data.audio_url}`;
+          const audioUrl = `${process.env.REACT_APP_BACKEND_URL}${response.data.audio_url}`;
           console.log('🔊 Playing voiceover:', audioUrl);
           
           const success = await playAudio(audioUrl, 'voice');
@@ -355,14 +355,14 @@ function App() {
         audio_url?: string;
         audio_file?: string;
         source: string;
-      }>('http://localhost:8000/generate-voice-audio', {
+      }>(`${process.env.REACT_APP_BACKEND_URL}/generate-voice-audio`, {
         message: motivationData.message
       });
       
       if (response.data.success && response.data.audio_url) {
         setNudgeExecuted(true);
         
-        const audioUrl = `http://localhost:8000${response.data.audio_url}`;
+        const audioUrl = `${process.env.REACT_APP_BACKEND_URL}${response.data.audio_url}`;
         console.log('🔊 Playing current message audio:', audioUrl);
         
         const success = await playAudio(audioUrl, 'voice');
@@ -387,7 +387,7 @@ function App() {
       console.log('🔔 Generating browser notification nudge...');
       
       // Generate motivational message using our backend
-      const response = await axios.post<NudgeResponse>('http://localhost:8000/get-notification-nudge');
+      const response = await axios.post<NudgeResponse>(`${process.env.REACT_APP_BACKEND_URL}/get-notification-nudge`);
       
       if (response.data.success) {
         // Set visual indicator that notification was sent
@@ -445,7 +445,7 @@ function App() {
       // Set break time mode to prevent other nudges from interfering
       setIsBreakTime(true);
       
-      const response = await axios.post<NudgeResponse>('http://localhost:8000/get-break-nudge');
+      const response = await axios.post<NudgeResponse>(`${process.env.REACT_APP_BACKEND_URL}/get-break-nudge`);
       
       console.log('🔍 Break nudge response:', response.data); // Debug log
       
@@ -466,7 +466,7 @@ function App() {
         
         // FORCE audio playback for break nudges
         if (response.data.audio_url) {
-          const audioUrl = `http://localhost:8000${response.data.audio_url}`;
+          const audioUrl = `${process.env.REACT_APP_BACKEND_URL}${response.data.audio_url}`;
           console.log('🔊 FORCING break voiceover playback:', audioUrl);
           
           // Stop any existing audio first
@@ -544,7 +544,7 @@ function App() {
     try {
       console.log('📊 Fetching focus chart for completed session...');
       
-      const response = await axios.post<FocusChartResponse>('http://localhost:8000/get-focus-chart');
+      const response = await axios.post<FocusChartResponse>(`${process.env.REACT_APP_BACKEND_URL}/get-focus-chart`);
       
       if (response.data.success) {
         console.log('📈 Focus chart generated successfully!');
@@ -585,7 +585,7 @@ function App() {
   const startFaceTracking = async () => {
     try {
       console.log('📹 Starting face tracking...');
-      const response = await axios.post<FaceTrackingResponse>('http://localhost:8000/start-face-tracking');
+      const response = await axios.post<FaceTrackingResponse>(`${process.env.REACT_APP_BACKEND_URL}/start-face-tracking`);
       
       if (response.data.success) {
         setFaceTrackingActive(true);
@@ -604,7 +604,7 @@ function App() {
   const stopFaceTracking = async () => {
     try {
       console.log('📹 Stopping face tracking...');
-      const response = await axios.post<FaceTrackingResponse>('http://localhost:8000/stop-face-tracking');
+      const response = await axios.post<FaceTrackingResponse>(`${process.env.REACT_APP_BACKEND_URL}/stop-face-tracking`);
       
       if (response.data.success) {
         setFaceTrackingActive(false);
@@ -617,7 +617,7 @@ function App() {
 
   const checkFaceTrackingStatus = async () => {
     try {
-      const response = await axios.get<FaceTrackingStatus>('http://localhost:8000/face-tracking-status');
+      const response = await axios.get<FaceTrackingStatus>(`${process.env.REACT_APP_BACKEND_URL}/face-tracking-status`);
       setLastFaceTrackingUpdate(response.data.last_update);
       
       // Update attention score from face tracking if available
