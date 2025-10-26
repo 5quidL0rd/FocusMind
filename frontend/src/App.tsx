@@ -40,11 +40,19 @@ interface FaceTrackingResponse {
   command?: string;
 }
 
+interface AutoMotivation {
+  audio_url: string | null;
+  message: string | null;
+  timestamp: string | null;
+  played: boolean;
+}
+
 interface FaceTrackingStatus {
   attention_score: number;
   focus_history_length: number;
   last_update: string | null;
   tracking_active: boolean;
+  auto_motivation: AutoMotivation;
 }
 
 function App() {
@@ -623,6 +631,31 @@ function App() {
       console.log('🔍 DEBUG FRONTEND: Current motivationData.attention_score:', motivationData?.attention_score);
       
       setLastFaceTrackingUpdate(response.data.last_update);
+      
+      // Check for auto-motivation audio that hasn't been played yet
+      if (response.data.auto_motivation && !response.data.auto_motivation.played && response.data.auto_motivation.audio_url) {
+        console.log('🎤 DEBUG FRONTEND: Auto-motivation audio detected!', response.data.auto_motivation);
+        
+        // Play the audio
+        const audioUrl = `http://localhost:8000${response.data.auto_motivation.audio_url}`;
+        console.log('🔊 Playing auto-motivation audio:', audioUrl);
+        
+        const success = await playAudio(audioUrl, 'auto-voice');
+        
+        if (success) {
+          // Mark as played on the backend
+          await axios.post('http://localhost:8000/mark-auto-motivation-played');
+          console.log('✅ Auto-motivation audio played and marked as complete');
+          
+          // Update the message if available
+          if (response.data.auto_motivation.message && motivationData) {
+            setMotivationData({
+              ...motivationData,
+              message: response.data.auto_motivation.message
+            });
+          }
+        }
+      }
       
       // Update attention score from face tracking if available
       if (response.data.attention_score !== undefined) {

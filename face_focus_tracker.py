@@ -463,7 +463,7 @@ class FaceFocusTracker:
             print(f"🚨 Focus dropped below {threshold}% - triggering motivational quote!")
             response = requests.post(f"{self.backend_url}/trigger-auto-motivation", 
                                    json={"threshold": threshold, "focus_score": self.current_focus_score}, 
-                                   timeout=3.0)
+                                   timeout=15.0)
             if response.status_code == 200:
                 print("💪 Motivational quote triggered successfully")
             else:

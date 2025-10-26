@@ -28,6 +28,14 @@ focus_score_history = []
 face_tracker = None
 tracking_active = False
 
+# Global auto-motivation state
+last_auto_motivation = {
+    "audio_url": None,
+    "message": None,
+    "timestamp": None,
+    "played": True  # Set to True initially so we don't auto-play old audio on page load
+}
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -362,7 +370,7 @@ async def update_focus_score(request: FocusScoreUpdate):
 @app.post("/trigger-auto-motivation")
 async def trigger_auto_motivation(request: AutoMotivationTrigger):
     """Trigger automatic motivational quote when focus drops below thresholds"""
-    global attention_score
+    global attention_score, last_auto_motivation
     
     try:
         print(f"🚨 Auto-motivation triggered! Focus dropped below {request.threshold}% (current: {request.focus_score:.1f}%)")
@@ -381,6 +389,15 @@ async def trigger_auto_motivation(request: AutoMotivationTrigger):
             if output_data.get("success"):
                 audio_filename = output_data.get("audio_file")
                 audio_url = f"/audio/{audio_filename}" if audio_filename else None
+                
+                # Store the auto-motivation for frontend to pick up
+                last_auto_motivation = {
+                    "audio_url": audio_url,
+                    "message": output_data["message"],
+                    "timestamp": datetime.now().isoformat(),
+                    "played": False  # Mark as not played yet
+                }
+                print(f"🎤 Auto-motivation audio ready: {audio_url}")
                 
                 return {
                     "success": True,
@@ -405,7 +422,7 @@ async def trigger_auto_motivation(request: AutoMotivationTrigger):
 @app.get("/face-tracking-status")
 async def get_face_tracking_status():
     """Get the current status of face tracking."""
-    global face_tracker, tracking_active, focus_score_history, attention_score
+    global face_tracker, tracking_active, focus_score_history, attention_score, last_auto_motivation
     
     print(f"🔍 DEBUG BACKEND: attention_score = {attention_score}, focus_history_length = {len(focus_score_history)}")
     
@@ -416,7 +433,8 @@ async def get_face_tracking_status():
             "attention_score": attention_score,
             "focus_history_length": len(focus_score_history),
             "last_update": None,
-            "tracking_active": False
+            "tracking_active": False,
+            "auto_motivation": last_auto_motivation  # Include auto-motivation state
         }
     
     print(f"🔍 DEBUG BACKEND: Face tracker exists, returning attention_score: {attention_score}")
@@ -425,7 +443,8 @@ async def get_face_tracking_status():
         "attention_score": attention_score,
         "focus_history_length": len(focus_score_history),
         "last_update": str(focus_score_history[-1]["timestamp"]) if focus_score_history else None,
-        "tracking_active": tracking_active
+        "tracking_active": tracking_active,
+        "auto_motivation": last_auto_motivation  # Include auto-motivation state
     }
 
 @app.post("/start-face-tracking")
@@ -446,6 +465,19 @@ async def stop_face_tracking():
     return {
         "success": True,
         "message": "Face tracking stop signal sent."
+    }
+
+@app.post("/mark-auto-motivation-played")
+async def mark_auto_motivation_played():
+    """Mark the auto-motivation audio as played by the frontend"""
+    global last_auto_motivation
+    
+    last_auto_motivation["played"] = True
+    print(f"✅ Auto-motivation audio marked as played")
+    
+    return {
+        "success": True,
+        "message": "Auto-motivation marked as played"
     }
 
 if __name__ == "__main__":
